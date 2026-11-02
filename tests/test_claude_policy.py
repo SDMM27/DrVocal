@@ -142,6 +142,10 @@ def test_unknown_tool_asks():
     assert decide("Foo", {}, P) is Decision.ASK
 
 
+def test_internal_todo_tool_allowed():
+    assert decide("TodoWrite", {"todos": []}, P) is Decision.ALLOW
+
+
 def test_question_asks():
     assert decide("AskUserQuestion", {"questions": []}, P) is Decision.ASK
 

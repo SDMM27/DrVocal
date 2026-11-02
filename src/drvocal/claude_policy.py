@@ -27,6 +27,8 @@ class Reply(enum.Enum):
 _READ_TOOLS = {"Read": "file_path", "Glob": "path", "Grep": "path"}
 _WRITE_TOOLS = {"Edit": "file_path", "Write": "file_path", "NotebookEdit": "notebook_path"}
 _COMMAND_TOOLS = {"Bash", "PowerShell"}
+# Liste de taches interne a Claude : sans effet externe, ne merite pas d'interrompre la partie.
+_INTERNAL_TOOLS = {"TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"}
 
 _DESTRUCTIVE = re.compile(
     r"""
@@ -83,6 +85,9 @@ def _touches_execution_config(relative: str) -> bool:
 
 def decide(tool: str, tool_input: dict, project: Path) -> Decision:
     """Decide du sort d'un outil ; tout ce qui n'est pas reconnu demande une autorisation."""
+    if tool in _INTERNAL_TOOLS:
+        return Decision.ALLOW
+
     if tool in _COMMAND_TOOLS:
         command = tool_input.get("command", "")
         return Decision.DENY if _DESTRUCTIVE.search(command) else Decision.ASK
