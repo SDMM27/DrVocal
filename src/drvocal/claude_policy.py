@@ -28,13 +28,18 @@ _READ_TOOLS = {"Read": "file_path", "Glob": "path", "Grep": "path"}
 _WRITE_TOOLS = {"Edit": "file_path", "Write": "file_path", "NotebookEdit": "notebook_path"}
 _COMMAND_TOOLS = {"Bash", "PowerShell"}
 # Liste de taches interne a Claude : sans effet externe, ne merite pas d'interrompre la partie.
-_INTERNAL_TOOLS = {"TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"}
+_INTERNAL_TOOLS = {"TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "ToolSearch"}
 
 _DESTRUCTIVE = re.compile(
     r"""
-    \brm\s+(?:\S+\s+)*-[a-z]*[rf]
-    | \b(?:remove-item|ri|rmdir|rd|del|erase)\b.*(?:\s-r|\s/s)
-    | \bformat\s+[a-z]:
+    \brm(?:\.exe)?\s+(?:\S+\s+)*-[a-z]*[rf]
+    | \brm(?:\.exe)?\s+(?:\S+\s+)*--(?:recursive|force)
+    | \brm(?:\.exe)?\s+(?:\S+\s+)*\*
+    | \b(?:remove-item|ri|rmdir|rd|del|erase)\b.*(?:\s-r|\s/s|\*)
+    | \bfind\b.*\s-delete\b
+    | \brimraf\b
+    | \bformat(?:\.com)?\s+(?:/\S+\s+)*[a-z]:
+    | \b(?:vssadmin|wmic)\b.*\bdelete\b
     | \b(?:format-volume|clear-disk|diskpart|mkfs)\b
     | \b(?:taskkill|tskill|stop-process|spps|kill|pkill|killall)\b
     | \b(?:shutdown|stop-computer|restart-computer)\b

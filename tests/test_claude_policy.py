@@ -175,6 +175,17 @@ def test_question_asks():
     "Restart-Computer",
     "git clean -fdx",
     "git reset --hard",
+    "rm --recursive --force x",
+    "rm.exe -rf x",
+    "rm *",
+    "del /q *.*",
+    "Remove-Item C:\\* -Force",
+    "find . -delete",
+    "format.com d:",
+    "format /fs:ntfs d:",
+    "rimraf x",
+    "wmic process delete",
+    "vssadmin delete shadows /all",
 ])
 def test_destructive_denied(cmd):
     assert decide("Bash", {"command": cmd}, P) is Decision.DENY
