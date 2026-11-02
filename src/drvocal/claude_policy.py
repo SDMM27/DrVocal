@@ -28,9 +28,6 @@ _READ_TOOLS = {"Read": "file_path", "Glob": "path", "Grep": "path"}
 _WRITE_TOOLS = {"Edit": "file_path", "Write": "file_path", "NotebookEdit": "notebook_path"}
 _COMMAND_TOOLS = {"Bash", "PowerShell"}
 
-# Ecrire ici permettrait de lancer des commandes sans passer par une autorisation.
-_EXECUTION_CONFIG = {".claude", ".git", ".mcp.json"}
-
 _DESTRUCTIVE = re.compile(
     r"""
     \brm\s+(?:\S+\s+)*-[a-z]*[rf]
@@ -52,6 +49,8 @@ def _is_alias(path: str) -> bool:
     drive, tail = ntpath.splitdrive(path)
     if drive.startswith(("\\\\", "//")):
         return True
+    if drive and not tail.startswith(("\\", "/")):  # "D:x" depend du dossier courant du lecteur
+        return True
     return any(
         part not in (".", "..") and (part != part.rstrip(". ") or ":" in part or "~" in part)
         for part in re.split(r"[\\/]", tail)
@@ -72,7 +71,9 @@ def _within_project(path: str, project: Path) -> str | None:
 
 
 def _touches_execution_config(relative: str) -> bool:
-    return relative.split("\\")[0] in _EXECUTION_CONFIG
+    """Fichiers caches : .claude, .git, .vscode, .husky, .envrc... peuvent lancer des
+    commandes sans autorisation. Tous demandent donc un accord, plutot qu'une liste."""
+    return any(part.startswith(".") for part in relative.split("\\") if part != ".")
 
 
 def decide(tool: str, tool_input: dict, project: Path) -> Decision:
@@ -83,7 +84,7 @@ def decide(tool: str, tool_input: dict, project: Path) -> Decision:
 
     if tool in _READ_TOOLS:
         pattern = tool_input.get("pattern", "") if tool == "Glob" else ""
-        if ".." in pattern or ntpath.isabs(pattern):
+        if ".." in pattern or ":" in pattern or pattern.startswith(("/", "\\", "~")):
             return Decision.ASK
         path = tool_input.get(_READ_TOOLS[tool]) or "."
         return Decision.ALLOW if _within_project(path, project) is not None else Decision.ASK

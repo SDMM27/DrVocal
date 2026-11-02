@@ -103,6 +103,25 @@ def test_symlink_to_execution_config_asks(monkeypatch):
     assert decide("Write", {"file_path": "D:/proj/lien"}, P) is Decision.ASK
 
 
+@pytest.mark.parametrize("path", [
+    "D:/proj/.vscode/tasks.json",
+    "D:/proj/.husky/pre-commit",
+    "D:/proj/.envrc",
+    "D:/proj/src/.idea/x.xml",
+])
+def test_writing_any_hidden_file_asks(path):
+    assert decide("Write", {"file_path": path}, P) is Decision.ASK
+
+
+def test_drive_relative_path_asks():
+    assert decide("Write", {"file_path": "D:x.py"}, P) is Decision.ASK
+
+
+@pytest.mark.parametrize("pattern", ["C:/**", "D:*", "~/**", "/etc/*", "\\\\srv\\x\\*"])
+def test_glob_pattern_outside_project_asks(pattern):
+    assert decide("Glob", {"pattern": pattern}, P) is Decision.ASK
+
+
 def test_bash_asks():
     assert decide("Bash", {"command": "npm test"}, P) is Decision.ASK
 
