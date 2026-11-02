@@ -1,0 +1,31 @@
+# Copier ce fichier en config.toml (ignore par git) et l'adapter.
+# Les secrets vont dans secrets.toml (ignore par git) : spotify_client_id, discord_bot_token.
+
+# Phrases d'activation (minuscules).
+wake_phrases = ["salut docteur", "bonjour docteur", "bungiorno docteur", "priviet docteur"]
+
+# Dossier des notes (defaut : Documents/NOTES).
+# notes_dir = "C:/Users/moi/Documents/NOTES"
+
+# Reconnaissance vocale : modele faster-whisper et peripherique (cpu ou cuda).
+stt_model = "small"
+stt_device = "cpu"
+
+# Index du second ecran (0 = ecran principal).
+second_screen_index = 1
+
+# Projets : nom parle -> dossier. Les noms sont mis en minuscules au chargement.
+[projects]
+"Dr Vocal" = "D:/NasaCode/DrVocal"
+
+# Raccourcis clavier Discord : action -> combinaison.
+[discord.hotkeys]
+mute = "ctrl+shift+m"
+
+# Salons vocaux : nom parle -> identifiant Discord.
+[discord.channels]
+general = 123456789012345678
+
+# Membres : nom parle -> identifiant Discord.
+[discord.members]
+alex = 123456789012345678
