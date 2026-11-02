@@ -5,7 +5,7 @@ import discord
 import pytest
 
 from drvocal.actions import Catalogue
-from drvocal.actions_discord import make_client, register_discord, run_bot
+from drvocal.actions_discord import BOT_PERMISSIONS, make_client, register_discord, run_bot
 from drvocal.intent import Intent
 
 OWNER = 99
@@ -232,3 +232,10 @@ async def test_run_bot_starts_client_with_token():
     client.start = AsyncMock()
     await run_bot("tok", client)
     client.start.assert_awaited_once_with("tok")
+
+
+def test_bot_permissions_constant_matches_flags():
+    expected = discord.Permissions(
+        view_channel=True, send_messages=True, mute_members=True,
+        deafen_members=True, move_members=True, connect=True)
+    assert BOT_PERMISSIONS == expected.value == 30411776

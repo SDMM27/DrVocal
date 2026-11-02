@@ -13,6 +13,8 @@ from drvocal.config import Settings
 from drvocal.intent import Intent
 
 CANCEL_DELAY = 4.0
+# View Channels, Send Messages, Mute Members, Deafen Members, Move Members, Connect.
+BOT_PERMISSIONS = 30411776
 
 
 def _norm(text: str) -> str:

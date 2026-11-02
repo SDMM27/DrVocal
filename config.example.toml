@@ -31,7 +31,9 @@ mute = "ctrl+shift+m"
 deafen = "ctrl+shift+d"
 
 # Bot Discord personnel (voir README / rapport pour la creation du bot).
-# Permissions minimales du bot : Send Messages, Move Members, Mute Members (+ View Channels).
+# Permissions du bot (permissions=30411776 dans l'URL d'invitation, scope bot) : View Channels,
+# Send Messages, Mute Members, Deafen Members, Move Members, Connect.
+# https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&scope=bot&permissions=30411776
 # Intents : Server Members Intent active dans le portail developpeur ; pas de Message Content.
 [discord]
 # Ton identifiant utilisateur Discord : le bot n'agit que dans les serveurs ou tu es membre.
