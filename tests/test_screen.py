@@ -35,11 +35,11 @@ def test_malformed_pending_has_no_buttons():
     assert parse_pending('p1"><x: y') is None
 
 
-def test_invalid_screen_index_falls_back_to_primary():
+def test_missing_screen_never_falls_back_to_primary():
     assert select_monitor(1, MONITORS) == MONITORS[1]
     for bad in (5, -1, 99):
-        assert select_monitor(bad, MONITORS) == MONITORS[0]
-    assert select_monitor(1, []) is None
+        assert select_monitor(bad, MONITORS) is None
+    assert select_monitor(0, []) is None
 
 
 class FakeWindow:
@@ -107,3 +107,81 @@ def test_page_has_restrictive_csp_and_no_remote_resources():
     assert "unsafe-inline" not in csp.split("script-src")[1].split(";")[0]
     assert not re.search(r'(src|href)="https?://', html)
     assert "isTrusted" in html and "innerHTML" in html
+
+
+def test_question_pending_uses_after_game_label():
+    html = render_event(SessionEvent("pending", "p4: Quel nom ?", question=True))
+    assert "Répondre après la partie" in html and ">Autoriser<" not in html
+    assert "Autoriser" in render_event(SessionEvent("pending", "p5: Bash: ls"))
+
+
+def test_unresolved_pending_is_never_evicted_by_text_events():
+    s, got = make_screen()
+    s.push(SessionEvent("pending", "p1: Bash: ls"))
+    for i in range(500):
+        s.push(SessionEvent("text", f"t{i}"))
+    assert len(s._history) <= 200
+    assert any(pid == "p1" for _, pid in s._history)
+    s._window.calls.clear()
+    s._ready = False
+    s._on_loaded()
+    assert any("ev pending" in c and "data-id" in c and "p1" in c for c in s._window.calls)
+
+
+def test_resolved_pending_can_be_evicted_later():
+    s, got = make_screen()
+    s.push(SessionEvent("pending", "p1: Bash: ls"))
+    s._bridge.decide("p1", "approve")
+    for i in range(300):
+        s.push(SessionEvent("text", f"t{i}"))
+    assert not any(pid == "p1" for _, pid in s._history)
+
+
+def test_page_never_removes_unresolved_pending_and_has_close_button():
+    html = (Path(screen_mod.__file__).parent / "screen.html").read_text(encoding="utf-8")
+    assert 'id="close"' in html and "hide_window" in html
+    assert 'classList.contains("resolved")' in html
+
+
+def test_window_is_not_topmost():
+    source = Path(screen_mod.__file__).read_text(encoding="utf-8")
+    assert "on_top" not in source and "TOPMOST" not in source
+
+
+def test_show_does_nothing_when_requested_monitor_is_missing(monkeypatch):
+    placed = []
+    monkeypatch.setattr(screen_mod, "_place_and_show", lambda hwnd, mon: placed.append((hwnd, mon)))
+    s = SecondScreen(1, monitors=lambda: [MONITORS[0]])
+    s._hwnd = 42
+    assert s.show() is False and placed == []
+    s.push(SessionEvent("text", "reste en memoire"))
+    assert len(s._history) == 1
+
+
+def test_show_places_window_on_requested_monitor(monkeypatch):
+    placed = []
+    monkeypatch.setattr(screen_mod, "_place_and_show", lambda hwnd, mon: placed.append((hwnd, mon)))
+    s = SecondScreen(1, monitors=lambda: MONITORS)
+    s._hwnd = 42
+    assert s.show() is True and placed == [(42, MONITORS[1])]
+
+
+def test_show_when_monitor_lookup_fails_stays_hidden(monkeypatch):
+    placed = []
+    monkeypatch.setattr(screen_mod, "_place_and_show", lambda hwnd, mon: placed.append(mon))
+
+    def boom():
+        raise RuntimeError("pas d'ecran")
+
+    s = SecondScreen(0, monitors=boom)
+    s._hwnd = 42
+    assert s.show() is False and placed == []
+
+
+def test_close_button_bridge_hides_window(monkeypatch):
+    hidden = []
+    monkeypatch.setattr(screen_mod, "_hide", hidden.append)
+    s = SecondScreen(0, monitors=lambda: MONITORS)
+    s._hwnd = 7
+    s._bridge.hide_window()
+    assert hidden == [7] and s._wanted_visible is False

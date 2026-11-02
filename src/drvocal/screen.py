@@ -10,7 +10,6 @@ pywebview exige que sa boucle graphique tourne dans le thread principal :
 `show()`, `push()` et `hide()` peuvent ensuite etre appeles depuis n'importe quel thread.
 """
 import base64
-import collections
 import hashlib
 import html
 import json
@@ -39,12 +38,17 @@ class Monitor:
 
 
 def select_monitor(index: int, monitors: list[Monitor]) -> Monitor | None:
-    """Ecran demande, ou l'ecran principal (le premier) si l'index est invalide."""
-    if not monitors:
-        return None
+    """Ecran demande, ou None s'il n'existe pas : jamais de repli sur l'ecran principal,
+    car la fenetre pourrait alors recouvrir le jeu."""
     if 0 <= index < len(monitors):
         return monitors[index]
-    return monitors[0]
+    return None
+
+
+def _current_monitors() -> list[Monitor]:
+    import webview  # import tardif : lourd, et inutile pour les tests
+
+    return [Monitor(s.x, s.y, s.width, s.height) for s in webview.screens]
 
 
 def parse_pending(text: str) -> tuple[str, str] | None:
@@ -62,11 +66,12 @@ def render_event(event: SessionEvent) -> str:
         parsed = parse_pending(event.text)
         if parsed:
             pending_id, summary = parsed
+            label = "Répondre après la partie" if event.question else "Autoriser"
             return (
                 f'<div class="ev pending" data-id="{html.escape(pending_id)}">'
                 f"<div>{html.escape(summary)}</div>"
                 '<div class="actions">'
-                '<button type="button" data-action="approve">Autoriser</button>'
+                f'<button type="button" data-action="approve">{label}</button>'
                 '<button type="button" data-action="reject">Refuser</button>'
                 "</div></div>"
             )
@@ -91,16 +96,20 @@ class _Bridge:
     def decide(self, pending_id, action) -> None:
         self._screen._decide(pending_id, action)
 
+    def hide_window(self) -> None:
+        self._screen.hide()
+
 
 class SecondScreen:
-    def __init__(self, screen_index: int) -> None:
+    def __init__(self, screen_index: int, monitors: Callable[[], list[Monitor]] = _current_monitors) -> None:
         self._index = screen_index
+        self._monitors = monitors
         self._lock = threading.Lock()
         self._bridge = _Bridge(self)
         self._callback: Callable[[str, Reply], None] | None = None
         self._pending: set[str] = set()
         self._resolved: set[str] = set()
-        self._history: collections.deque[str] = collections.deque(maxlen=_MAX_EVENTS)
+        self._history: list[tuple[str, str | None]] = []  # (html, id d'une demande, sinon None)
         self._window = None
         self._ready = False
         self._wanted_visible = False
@@ -113,12 +122,26 @@ class SecondScreen:
     def push(self, event: SessionEvent) -> None:
         rendered = render_event(event)
         with self._lock:
+            pending_id = None
             if event.kind == "pending":
                 parsed = parse_pending(event.text)
                 if parsed:
-                    self._pending.add(parsed[0])
-            self._history.append(rendered)
+                    pending_id = parsed[0]
+                    self._pending.add(pending_id)
+            self._history.append((rendered, pending_id))
+            self._evict()
             self._send("addEvent", {"html": rendered})
+
+    def _evict(self) -> None:
+        """Garde _MAX_EVENTS evenements au plus, sans jamais perdre une demande non traitee."""
+        while len(self._history) > _MAX_EVENTS:
+            for i, (_, pending_id) in enumerate(self._history):
+                if pending_id is None or pending_id in self._resolved:
+                    del self._history[i]
+                    self._resolved.discard(pending_id)
+                    break
+            else:
+                return  # que des demandes en attente : on les garde toutes
 
     def _decide(self, pending_id, action) -> None:
         reply = _ACTIONS.get(action) if isinstance(action, str) else None
@@ -149,7 +172,7 @@ class SecondScreen:
             first = not self._ready
             self._ready = True
             if first:
-                for rendered in self._history:
+                for rendered, _ in self._history:
                     self._send("addEvent", {"html": rendered})
                 for pending_id in self._resolved:
                     self._send("markResolved", {"id": pending_id})
@@ -163,14 +186,13 @@ class SecondScreen:
         """Cree la fenetre (masquee) et bloque dans la boucle graphique. Thread principal."""
         import webview  # import tardif : lourd, et inutile pour les tests
 
-        monitors = [Monitor(s.x, s.y, s.width, s.height) for s in webview.screens]
-        mon = select_monitor(self._index, monitors) or Monitor(0, 0, 800, 600)
+        # Creee masquee a une position neutre ; l'ecran voulu est choisi a chaque show().
         self._window = webview.create_window(
             "Dr Vocal",
             html=_page_with_hash(),
             js_api=self._bridge,
-            x=mon.x, y=mon.y, width=mon.width, height=mon.height,
-            hidden=True, focus=False, frameless=True, easy_drag=False, on_top=True,
+            width=800, height=600,
+            hidden=True, focus=False, frameless=True, easy_drag=False,
         )
         self._window.events.loaded += self._on_loaded
         webview.start()
@@ -178,11 +200,24 @@ class SecondScreen:
         self._window = None
         self._hwnd = 0
 
-    def show(self) -> None:
-        """Affiche la fenetre sans l'activer."""
+    def show(self) -> bool:
+        """Affiche la fenetre sans l'activer, sur l'ecran demande uniquement.
+
+        Si cet ecran n'existe pas (ou ne peut pas etre lu), la fenetre reste masquee : la
+        remplacer sur l'ecran principal pourrait recouvrir le jeu. Les evenements
+        continuent de s'accumuler et s'affichent au prochain show() reussi.
+        """
+        try:
+            monitor = select_monitor(self._index, self._monitors())
+        except Exception:
+            monitor = None
+        if monitor is None:
+            self._wanted_visible = False
+            return False
         self._wanted_visible = True
         if self._hwnd:
-            _show_no_activate(self._hwnd)
+            _place_and_show(self._hwnd, monitor)
+        return True
 
     def hide(self) -> None:
         self._wanted_visible = False
@@ -215,8 +250,7 @@ _WS_EX_TOOLWINDOW = 0x00000080  # pas de bouton dans la barre des taches ni dans
 _WS_EX_APPWINDOW = 0x00040000
 _SW_HIDE = 0
 _SW_SHOWNOACTIVATE = 4
-_HWND_TOPMOST = -1
-_SWP_NOSIZE, _SWP_NOMOVE, _SWP_NOACTIVATE = 0x1, 0x2, 0x10
+_SWP_NOZORDER, _SWP_NOACTIVATE = 0x4, 0x10
 
 
 def _user32():
@@ -241,10 +275,11 @@ def _set_noactivate_style(hwnd: int) -> None:
     u.SetWindowLongPtrW(hwnd, _GWL_EXSTYLE, style)
 
 
-def _show_no_activate(hwnd: int) -> None:
+def _place_and_show(hwnd: int, mon: Monitor) -> None:
+    """Place la fenetre sur l'ecran voulu puis l'affiche, sans activation ni « toujours au-dessus »."""
     u = _user32()
+    u.SetWindowPos(hwnd, None, mon.x, mon.y, mon.width, mon.height, _SWP_NOZORDER | _SWP_NOACTIVATE)
     u.ShowWindow(hwnd, _SW_SHOWNOACTIVATE)
-    u.SetWindowPos(hwnd, _HWND_TOPMOST, 0, 0, 0, 0, _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOACTIVATE)
 
 
 def _hide(hwnd: int) -> None:

@@ -8,6 +8,7 @@ import asyncio
 import itertools
 import json
 import os
+import unicodedata
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,7 @@ from claude_agent_sdk import (
     PermissionResultAllow,
     PermissionResultDeny,
     ResultMessage,
+    SystemMessage,
     TextBlock,
     ToolUseBlock,
 )
@@ -42,11 +44,22 @@ class _Pending:
 class SessionEvent:
     kind: str  # text, tool, pending, done ou error
     text: str
+    question: bool = False  # pending : une question de Claude, pas une autorisation
+
+
+_FORBIDDEN_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 
 
 def build_env() -> dict[str, str]:
     """Environnement sans cle API, pour que la facturation reste sur l'abonnement."""
-    return {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+    return {k: v for k, v in os.environ.items() if k not in _FORBIDDEN_ENV}
+
+
+def scrub_environ() -> None:
+    """Retire les cles du processus : le SDK fusionne options.env PAR-DESSUS os.environ,
+    donc une cle simplement omise de options.env serait heritee par Claude Code."""
+    for key in _FORBIDDEN_ENV:
+        os.environ.pop(key, None)
 
 
 _SUMMARY_KEYS = {
@@ -78,7 +91,10 @@ def _summary(tool: str, tool_input: dict) -> str:
 
 def _fits_voice(summary: str, limit: int = _SPOKEN_LIMIT) -> bool:
     """Un texte trop long ou sur plusieurs lignes ne peut pas etre autorise a la voix."""
-    return len(summary) <= limit and not any(c in summary for c in (chr(10), chr(13)))
+    if len(summary) > limit:
+        return False
+    # Cc (retours a la ligne...), Cf (bidi, invisibles), Zl/Zp (U+2028/2029) : texte qu'on ne peut pas dire fidelement.
+    return not any(unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") for c in summary)
 
 
 def _screen_text(pending_id: str, entry: "_Pending") -> str:
@@ -109,10 +125,12 @@ class ClaudeRunner:
     def __init__(
         self,
         on_event: Callable[[SessionEvent], None],
-        ask_user: Callable[[str], Awaitable[Reply | str]],
+        ask_user: Callable[[str, str], Awaitable[Reply | str]],
         client_factory: Callable[[ClaudeAgentOptions], object] = lambda options: ClaudeSDKClient(options=options),
         ask_timeout: float = 60.0,
     ):
+        """`ask_user(texte, kind)` avec kind valant "approval" ou "question"."""
+        scrub_environ()
         self._emit = on_event
         self._ask_user = ask_user
         self._factory = client_factory
@@ -122,25 +140,32 @@ class ClaudeRunner:
         self._ids = itertools.count(1)
         self.pending: dict[str, _Pending] = {}
         self._approved: list[tuple[str, dict]] = []
+        self._run_lock = asyncio.Lock()  # une seule execution de Claude a la fois
+        self._ask_lock = asyncio.Lock()  # un seul « oui docteur » attendu a la fois
 
     async def start(self, project: Path, prompt: str) -> None:
-        self._project, self._session_id = project, None
-        self.pending.clear()
-        self._approved.clear()
-        await self._run(prompt)
+        async with self._run_lock:
+            self._project, self._session_id = project, None
+            self.pending.clear()
+            self._approved.clear()
+            await self._run(prompt)
 
     async def resume(self, prompt: str) -> None:
-        if self._project is None or self._session_id is None:
-            self._emit(SessionEvent("error", "Aucune session Claude à reprendre."))
-            self._emit(SessionEvent("done", ""))
-            return
-        await self._run(prompt)
+        async with self._run_lock:
+            if self._project is None or self._session_id is None:
+                self._emit(SessionEvent("error", "Aucune session Claude à reprendre."))
+                self._emit(SessionEvent("done", ""))
+                return
+            await self._run(prompt)
 
     async def resolve_pending(self, pending_id: str, reply: Reply) -> bool:
         """Traite une demande restee sans reponse ; une approbation relance la session."""
-        entry = self.pending.pop(pending_id, None)
+        entry = self.pending.get(pending_id)
         if entry is None:
             return False
+        if reply is Reply.APPROVE and (self._project is None or self._session_id is None):
+            return False  # session pas encore reprenable : la demande reste en attente
+        del self.pending[pending_id]
         if reply is Reply.APPROVE:
             if entry.tool is None:
                 await self.resume(f"L'utilisateur n'a pas pu répondre à : {entry.summary}. Reformule ou continue.")
@@ -152,19 +177,28 @@ class ClaudeRunner:
     def _add_pending(self, entry: _Pending) -> None:
         pending_id = f"p{next(self._ids)}"
         self.pending[pending_id] = entry
-        self._emit(SessionEvent("pending", _screen_text(pending_id, entry)))
+        self._emit(SessionEvent("pending", _screen_text(pending_id, entry), question=entry.tool is None))
 
     def _options(self) -> ClaudeAgentOptions:
+        # Le hook doit durer plus longtemps que la question vocale, sinon les deux se courent apres.
+        hook = HookMatcher(hooks=[self._pre_tool_use], timeout=self._ask_timeout + 30)
         return ClaudeAgentOptions(
             cwd=self._project,
             env=build_env(),
             resume=self._session_id,
             permission_mode="default",
+            # Aucune regle utilisateur/projet ne peut autoriser un outil a notre place ;
+            # en contrepartie, le CLAUDE.md et les skills de l'utilisateur ne sont pas charges.
+            setting_sources=[],
+            system_prompt={"type": "preset", "preset": "claude_code"},
             can_use_tool=self._can_use_tool,
-            hooks={"PreToolUse": [HookMatcher(hooks=[self._pre_tool_use])]},
+            hooks={"PreToolUse": [hook]},
         )
 
     async def _run(self, prompt: str) -> None:
+        """A appeler sous `_run_lock`."""
+        scrub_environ()
+        granted = list(self._approved)  # approbations valables pour cette execution
         try:
             async with self._factory(self._options()) as client:
                 await client.query(prompt)
@@ -173,11 +207,16 @@ class ClaudeRunner:
         except Exception as exc:  # limite d'usage, processus mort, connexion expiree...
             self._emit(SessionEvent("error", str(exc) or type(exc).__name__))
         finally:
-            self._approved.clear()  # une approbation ne vaut que pour la reprise qui l'a suivie
+            # Une approbation ne vaut que pour l'execution qui l'a suivie ; celles donnees
+            # pendant celle-ci (execution suivante en file) sont conservees.
+            self._approved[:] = [a for a in self._approved if not any(a is g for g in granted)]
         self._emit(SessionEvent("done", ""))
 
     def _handle(self, message: object) -> None:
-        if isinstance(message, AssistantMessage):
+        if isinstance(message, SystemMessage):
+            if message.subtype == "init":
+                self._session_id = (message.data or {}).get("session_id") or self._session_id
+        elif isinstance(message, AssistantMessage):
             for block in message.content:
                 if isinstance(block, TextBlock):
                     self._emit(SessionEvent("text", block.text))
@@ -188,9 +227,14 @@ class ClaudeRunner:
             if message.is_error:
                 self._emit(SessionEvent("error", message.result or "; ".join(message.errors or []) or message.subtype))
 
-    async def _ask(self, text: str) -> Reply | str:
+    async def _serialized_ask(self, text: str, kind: str) -> Reply | str:
+        async with self._ask_lock:
+            return await self._ask_user(text, kind)
+
+    async def _ask(self, text: str, kind: str) -> Reply | str:
+        """Une seule question a la fois ; l'attente du tour compte dans le delai total."""
         try:
-            return await asyncio.wait_for(self._ask_user(text), self._ask_timeout)
+            return await asyncio.wait_for(self._serialized_ask(text, kind), self._ask_timeout)
         except Exception:  # TimeoutError compris ; CancelledError n'est pas une Exception
             return Reply.NONE
 
@@ -217,7 +261,7 @@ class ClaudeRunner:
         if not _fits_voice(summary):
             self._add_pending(_Pending(summary, tool, tool_input, screen_only=True))
             return _verdict("deny", "Action trop longue pour une autorisation vocale ; en attente sur le deuxième écran.")
-        reply = await self._ask(f"{summary}. Dis oui docteur pour autoriser.")
+        reply = await self._ask(f"{summary}. Dis oui docteur pour autoriser.", "approval")
         if reply is Reply.APPROVE:
             return _verdict("allow")
         if reply is Reply.REJECT:
@@ -230,8 +274,11 @@ class ClaudeRunner:
             if tool != _QUESTION_TOOL:
                 return PermissionResultDeny(message="Outil non autorisé par Dr Vocal.")
             text = _question_text(tool_input)
-            answer = await self._ask(text)
-            if not isinstance(answer, str):
+            if not _fits_voice(text):  # trop long pour etre dit en entier
+                self._add_pending(_Pending(text, screen_only=True))
+                return PermissionResultDeny(message=_NO_ANSWER)
+            answer = await self._ask(text, "question")
+            if not isinstance(answer, str) or not answer.strip():
                 self._add_pending(_Pending(text))
                 return PermissionResultDeny(message=_NO_ANSWER)
             answers = {q["question"]: answer for q in tool_input.get("questions", [])}

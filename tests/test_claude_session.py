@@ -8,6 +8,7 @@ from claude_agent_sdk import (
     PermissionResultDeny,
     ProcessError,
     ResultMessage,
+    SystemMessage,
     TextBlock,
     ToolUseBlock,
 )
@@ -38,26 +39,28 @@ class FakeClient:
         self.prompts.append(prompt)
 
     async def receive_response(self):
-        if self.during:
-            await self.during(self)
         if self.error:
             raise self.error
         for message in self.messages:
             yield message
+        if self.during:
+            await self.during(self)
 
 
 class Harness:
     def __init__(self, answers=None, messages=None, error=None):
         self.events: list[SessionEvent] = []
         self.asked: list[str] = []
+        self.kinds_asked: list[str] = []
         self.answers = list(answers or [])
         self.clients: list[FakeClient] = []
         self.messages, self.error = messages or [result()], error
         self.during = None  # appelee dans la prochaine execution du client, comme un outil de Claude
         self.runner = ClaudeRunner(self.events.append, self.ask, client_factory=self.factory)
 
-    async def ask(self, summary):
+    async def ask(self, summary, kind):
         self.asked.append(summary)
+        self.kinds_asked.append(kind)
         return self.answers.pop(0) if self.answers else Reply.NONE
 
     def factory(self, options):
@@ -187,7 +190,7 @@ async def test_no_reply_keeps_request_pending_and_does_not_run(runner):
 async def test_ask_user_timeout_counts_as_no_reply():
     h = Harness()
 
-    async def slow(summary):
+    async def slow(summary, kind):
         await asyncio.sleep(5)
 
     h.runner = ClaudeRunner(h.events.append, slow, client_factory=h.factory, ask_timeout=0.01)
@@ -293,7 +296,7 @@ async def test_deny_wins_even_if_recorded():
 async def test_ask_user_exception_denies_and_goes_pending():
     h = Harness()
 
-    async def boom(summary):
+    async def boom(summary, kind):
         raise RuntimeError("micro mort")
 
     h.runner = ClaudeRunner(h.events.append, boom, client_factory=h.factory)
@@ -325,7 +328,7 @@ async def test_can_use_tool_exception_denies():
 async def test_cancellation_is_not_swallowed():
     h = Harness()
 
-    async def cancelled(summary):
+    async def cancelled(summary, kind):
         raise asyncio.CancelledError
 
     h.runner = ClaudeRunner(h.events.append, cancelled, client_factory=h.factory)
@@ -420,3 +423,189 @@ async def test_pending_text_has_full_input_but_speech_does_not():
     await h.hook("Write", {"file_path": "C:/x.py", "content": "SECRET_CONTENU"})
     assert "SECRET_CONTENU" in next(e.text for e in h.events if e.kind == "pending")
     assert "SECRET_CONTENU" not in h.asked[0] and "C:/x.py" in h.asked[0]
+
+
+# --- round 3 ---------------------------------------------------------------
+
+
+async def test_environment_of_spawned_process_has_no_api_key(monkeypatch):
+    """On lit l'environnement final tel que le transport du SDK le calcule (os.environ + options.env)."""
+    import os
+    import sys
+
+    import claude_agent_sdk._internal.transport.subprocess_cli as cli
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "cle")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "jeton")
+    monkeypatch.setenv("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK", "1")
+    h = Harness()
+    captured = {}
+
+    async def fake_open_process(cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(cli.anyio, "open_process", fake_open_process)
+    await h.runner.start(P, "x")
+    options = h.options
+    options.cli_path = sys.executable
+    transport = cli.SubprocessCLITransport(prompt="x", options=options)
+    with pytest.raises(Exception):
+        await transport.connect()
+    assert "ANTHROPIC_API_KEY" not in captured["env"] and "ANTHROPIC_AUTH_TOKEN" not in captured["env"]
+    assert "ANTHROPIC_API_KEY" not in os.environ
+
+
+async def test_environ_is_scrubbed_before_each_run(monkeypatch):
+    import os
+
+    h = Harness()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "cle")
+    await h.runner.start(P, "x")
+    assert "ANTHROPIC_API_KEY" not in os.environ
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "jeton")
+    await h.runner.resume("y")
+    assert "ANTHROPIC_AUTH_TOKEN" not in os.environ
+
+
+async def test_options_use_no_setting_sources_and_hook_outlives_voice_timeout(runner):
+    await runner.runner.start(P, "x")
+    options = runner.options
+    assert options.setting_sources == []
+    assert options.system_prompt == {"type": "preset", "preset": "claude_code"}
+    assert options.hooks["PreToolUse"][0].timeout == 60.0 + 30
+
+
+async def test_hook_timeout_follows_ask_timeout():
+    h = Harness()
+    h.runner = ClaudeRunner(h.events.append, h.ask, client_factory=h.factory, ask_timeout=5)
+    await h.runner.start(P, "x")
+    assert h.options.hooks["PreToolUse"][0].timeout == 35
+
+
+async def test_overlapping_runs_are_sequential():
+    active, peak = [0], [0]
+
+    class SlowClient(FakeClient):
+        async def receive_response(self):
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+            await asyncio.sleep(0.02)
+            active[0] -= 1
+            yield result()
+
+    h = Harness()
+    h.runner = ClaudeRunner(h.events.append, h.ask, client_factory=lambda o: SlowClient(o, []))
+    await asyncio.gather(h.runner.start(P, "a"), h.runner.resume("b"), h.runner.resume("c"))
+    assert peak[0] == 1
+
+
+async def test_parallel_asks_are_serialized():
+    active, peak, order = [0], [0], []
+
+    async def ask(summary, kind):
+        active[0] += 1
+        peak[0] = max(peak[0], active[0])
+        order.append(summary)
+        await asyncio.sleep(0.01)
+        active[0] -= 1
+        return Reply.APPROVE
+
+    h = Harness()
+    h.runner = ClaudeRunner(h.events.append, ask, client_factory=h.factory)
+    await h.runner.start(P, "x")
+    outs = await asyncio.gather(h.hook("Bash", {"command": "a"}), h.hook("Bash", {"command": "b"}))
+    assert peak[0] == 1 and len(order) == 2
+    assert all(o["permissionDecision"] == "allow" for o in outs)
+
+
+async def test_queued_ask_counts_its_wait_in_the_timeout():
+    async def ask(summary, kind):
+        await asyncio.sleep(0.2)
+        return Reply.APPROVE
+
+    h = Harness()
+    h.runner = ClaudeRunner(h.events.append, ask, client_factory=h.factory, ask_timeout=0.05)
+    await h.runner.start(P, "x")
+    outs = await asyncio.gather(h.hook("Bash", {"command": "a"}), h.hook("Bash", {"command": "b"}))
+    assert [o["permissionDecision"] for o in outs] == ["deny", "deny"]
+
+
+async def test_approval_during_first_run_is_not_lost_and_no_false_done():
+    init = SystemMessage(subtype="init", data={"session_id": "s1"})
+    h = Harness(messages=[init])
+    outs, tasks = [], []
+
+    async def retry(client):
+        outs.append(await h.hook("Bash", {"command": "npm test"}))
+
+    async def first(client):
+        await h.hook("Bash", {"command": "npm test"})
+        pending_id = next(iter(h.runner.pending))
+        tasks.append(asyncio.create_task(h.runner.resolve_pending(pending_id, Reply.APPROVE)))
+        await asyncio.sleep(0.01)  # la reprise est en file derriere la premiere execution
+        assert h.kinds().count("done") == 0 and len(h.clients) == 1
+        h.during = retry
+
+    h.during = first
+    await h.runner.start(P, "x")
+    assert await tasks[0] is True
+    assert outs[0]["permissionDecision"] == "allow"
+    assert h.kinds().count("done") == 2
+
+
+async def test_resolve_pending_stays_pending_when_session_not_resumable():
+    h = Harness(messages=[AssistantMessage(content=[], model="m")])
+    await h.runner.start(P, "x")
+    await h.hook("Bash", {"command": "npm test"})
+    pending_id = next(iter(h.runner.pending))
+    assert await h.runner.resolve_pending(pending_id, Reply.APPROVE) is False
+    assert pending_id in h.runner.pending and h.runner._approved == [] and len(h.clients) == 1
+
+
+async def test_session_id_is_captured_from_init_message():
+    h = Harness(messages=[SystemMessage(subtype="init", data={"session_id": "sinit"})])
+    await h.runner.start(P, "x")
+    await h.runner.resume("y")
+    assert h.options.resume == "sinit"
+
+
+@pytest.mark.parametrize("command", ["echo ‮evil", "echo a b", "echo a\x00b"])
+async def test_control_and_format_characters_are_screen_only(command):
+    h = Harness(answers=[Reply.APPROVE])
+    await h.runner.start(P, "x")
+    out = await h.hook("Bash", {"command": command})
+    assert out["permissionDecision"] == "deny" and h.asked == []
+    assert any(e.kind == "pending" for e in h.events)
+
+
+async def test_ask_kinds_are_approval_and_question():
+    h = Harness(answers=[Reply.APPROVE, "oui"])
+    await h.runner.start(P, "x")
+    await h.hook("Bash", {"command": "npm test"})
+    await h.options.can_use_tool("AskUserQuestion", QUESTION, None)
+    assert h.kinds_asked == ["approval", "question"]
+
+
+async def test_overlong_question_goes_pending_without_asking():
+    h = Harness(answers=["reponse"])
+    await h.runner.start(P, "x")
+    long_q = {"questions": [{"question": "Q" * 400, "options": []}]}
+    res = await h.options.can_use_tool("AskUserQuestion", long_q, None)
+    assert isinstance(res, PermissionResultDeny) and h.asked == []
+    assert [e.question for e in h.events if e.kind == "pending"] == [True]
+
+
+async def test_empty_answer_counts_as_no_answer():
+    h = Harness(answers=["  "])
+    await h.runner.start(P, "x")
+    res = await h.options.can_use_tool("AskUserQuestion", QUESTION, None)
+    assert isinstance(res, PermissionResultDeny)
+    assert [e.question for e in h.events if e.kind == "pending"] == [True]
+
+
+async def test_tool_pending_is_not_a_question():
+    h = Harness()
+    await h.runner.start(P, "x")
+    await h.hook("Bash", {"command": "npm test"})
+    assert [e.question for e in h.events if e.kind == "pending"] == [False]

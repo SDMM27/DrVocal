@@ -18,10 +18,13 @@
   button { font: inherit; padding: 6px 16px; margin-right: 8px; border: 0; border-radius: 4px; cursor: pointer; color: #111; }
   button[data-action="approve"] { background: #5cc46b; }
   button[data-action="reject"] { background: #ff6b6b; }
+  #close { position: fixed; top: 8px; right: 12px; background: #3a3f4b; color: #e6e6e6; z-index: 10; margin: 0; }
+  #log { padding-top: 44px; }
   button:disabled { opacity: .4; cursor: default; }
 </style>
 </head>
 <body>
+<button type="button" id="close">Fermer</button>
 <div id="log"></div>
 <script>
 (function () {
@@ -34,7 +37,16 @@
     var node = div.firstElementChild;
     if (!node) return;
     log.appendChild(node);
-    while (log.children.length > MAX) log.removeChild(log.firstChild);
+    // Ne jamais supprimer une demande non traitee : on retire le plus ancien element sans cet etat.
+    while (log.children.length > MAX) {
+      var victim = null;
+      for (var i = 0; i < log.children.length; i++) {
+        var c = log.children[i];
+        if (!(c.classList.contains("pending") && !c.classList.contains("resolved"))) { victim = c; break; }
+      }
+      if (!victim) break;
+      log.removeChild(victim);
+    }
     window.scrollTo(0, document.body.scrollHeight);
   };
   window.markResolved = function (payload) {
@@ -47,6 +59,10 @@
       }
     }
   };
+  document.getElementById("close").addEventListener("click", function (e) {
+    if (!e.isTrusted) return;
+    if (window.pywebview && window.pywebview.api) window.pywebview.api.hide_window();
+  });
   log.addEventListener("click", function (e) {
     if (!e.isTrusted) return;  // seulement un vrai clic, jamais un clic simule par script
     var btn = e.target.closest ? e.target.closest("button[data-action]") : null;
