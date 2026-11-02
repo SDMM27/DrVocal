@@ -7,7 +7,11 @@ authors = [
     { name = "SachDn", email = "72878858+SDMM27@users.noreply.github.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "faster-whisper>=1.2.1",
+    "numpy>=2.5.4",
+    "sounddevice>=0.5.6",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.24,<0.13.0"]
@@ -15,6 +19,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "piper-tts>=1.8.0",
     "pytest",
     "pytest-asyncio>=1.4.1.post1",
 ]
@@ -23,3 +28,6 @@ dev = [
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "slow: charge un vrai modele (telechargement, plusieurs secondes)",
+]
