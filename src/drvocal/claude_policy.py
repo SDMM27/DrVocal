@@ -43,6 +43,11 @@ _DESTRUCTIVE = re.compile(
 )
 
 
+# Motifs qui peuvent sortir du projet : "..", lecteur, racine, ~, y compris dans une
+# alternative {a,/b}. Les crochets ([.][.]/) ne sont pas analyses et demandent un accord.
+_GLOB_ESCAPE = re.compile(r"\.\.|:|\[|^[/\\~]|[{,]\s*[/\\~]")
+
+
 def _is_alias(path: str) -> bool:
     """Formes qui designent sous Windows un autre fichier que leur texte : point ou
     espace final, flux NTFS, nom court 8.3, prefixe de peripherique."""
@@ -84,7 +89,7 @@ def decide(tool: str, tool_input: dict, project: Path) -> Decision:
 
     if tool in _READ_TOOLS:
         pattern = tool_input.get("pattern", "") if tool == "Glob" else ""
-        if ".." in pattern or ":" in pattern or pattern.startswith(("/", "\\", "~")):
+        if _GLOB_ESCAPE.search(pattern):
             return Decision.ASK
         path = tool_input.get(_READ_TOOLS[tool]) or "."
         return Decision.ALLOW if _within_project(path, project) is not None else Decision.ASK

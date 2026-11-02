@@ -117,9 +117,17 @@ def test_drive_relative_path_asks():
     assert decide("Write", {"file_path": "D:x.py"}, P) is Decision.ASK
 
 
-@pytest.mark.parametrize("pattern", ["C:/**", "D:*", "~/**", "/etc/*", "\\\\srv\\x\\*"])
+@pytest.mark.parametrize("pattern", [
+    "C:/**", "D:*", "~/**", "/etc/*", "\\\\srv\\x\\*",
+    "{/etc,src}/*", "{src,~}/*", "{src, /etc}/*", "{..,src}/*", "[.][.]/*",
+])
 def test_glob_pattern_outside_project_asks(pattern):
     assert decide("Glob", {"pattern": pattern}, P) is Decision.ASK
+
+
+@pytest.mark.parametrize("pattern", ["**/*.py", "src/*.{ts,tsx}", "{src,tests}/**"])
+def test_glob_pattern_inside_project_allowed(pattern):
+    assert decide("Glob", {"pattern": pattern}, P) is Decision.ALLOW
 
 
 def test_bash_asks():
