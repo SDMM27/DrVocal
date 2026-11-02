@@ -69,6 +69,40 @@ def test_writing_execution_config_asks(path):
     assert decide("Write", {"file_path": path}, P) is Decision.ASK
 
 
+# Windows ouvre le meme fichier sous ces formes : elles ne doivent pas contourner la regle.
+@pytest.mark.parametrize("path", [
+    "D:/proj/.git./hooks/pre-commit",
+    "D:/proj/.git /hooks/pre-commit",
+    "D:/proj/.claude./settings.json",
+    "D:/proj/.mcp.json.",
+    "D:/proj/.git::$INDEX_ALLOCATION/hooks/pre-commit",
+    "D:/proj/a.py:flux",
+    "D:/proj/GIT~1/hooks/pre-commit",
+    "\\\\?\\D:\\proj\\.git\\config",
+    "\\\\.\\D:\\proj\\.git\\config",
+])
+def test_windows_path_aliases_ask(path):
+    assert decide("Write", {"file_path": path}, P) is Decision.ASK
+
+
+def test_symlink_leaving_project_asks(monkeypatch):
+    real = "C:\\Users\\moi\\.ssh\\id_rsa"
+    monkeypatch.setattr(
+        "drvocal.claude_policy.os.path.realpath",
+        lambda p: real if p.lower().endswith("lien") else p,
+    )
+    assert decide("Read", {"file_path": "D:/proj/lien"}, P) is Decision.ASK
+    assert decide("Write", {"file_path": "D:/proj/lien"}, P) is Decision.ASK
+
+
+def test_symlink_to_execution_config_asks(monkeypatch):
+    monkeypatch.setattr(
+        "drvocal.claude_policy.os.path.realpath",
+        lambda p: "D:\\proj\\.git\\config" if p.lower().endswith("lien") else p,
+    )
+    assert decide("Write", {"file_path": "D:/proj/lien"}, P) is Decision.ASK
+
+
 def test_bash_asks():
     assert decide("Bash", {"command": "npm test"}, P) is Decision.ASK
 

@@ -6,6 +6,7 @@ demande une autorisation, et jamais l'inverse.
 """
 import enum
 import ntpath
+import os
 import re
 import unicodedata
 from pathlib import Path
@@ -45,10 +46,24 @@ _DESTRUCTIVE = re.compile(
 )
 
 
+def _is_alias(path: str) -> bool:
+    """Formes qui designent sous Windows un autre fichier que leur texte : point ou
+    espace final, flux NTFS, nom court 8.3, prefixe de peripherique."""
+    drive, tail = ntpath.splitdrive(path)
+    if drive.startswith(("\\\\", "//")):
+        return True
+    return any(
+        part not in (".", "..") and (part != part.rstrip(". ") or ":" in part or "~" in part)
+        for part in re.split(r"[\\/]", tail)
+    )
+
+
 def _within_project(path: str, project: Path) -> str | None:
-    """Renvoie le chemin relatif normalise si `path` est dans le projet, sinon None."""
-    root = ntpath.normcase(ntpath.normpath(str(project)))
-    full = ntpath.normcase(ntpath.normpath(ntpath.join(root, path)))
+    """Renvoie le chemin relatif reel si `path` est dans le projet, sinon None."""
+    if _is_alias(path):
+        return None
+    root = ntpath.normcase(os.path.realpath(ntpath.normpath(str(project))))
+    full = ntpath.normcase(os.path.realpath(ntpath.normpath(ntpath.join(str(project), path))))
     if full == root:
         return "."
     if full.startswith(root.rstrip("\\") + "\\"):
