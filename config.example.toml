@@ -1,6 +1,9 @@
 # Copier ce fichier en config.toml (ignore par git) et l'adapter.
 # Les secrets vont dans secrets.toml (ignore par git) : spotify_client_id, discord_bot_token.
 
+# Raccourcis Discord simules (SendInput). DESACTIVE par defaut : lire docs/anti-triche.md avant d'activer.
+simulated_hotkeys_enabled = false
+
 # Phrases d'activation (minuscules).
 wake_phrases = ["salut docteur", "bonjour docteur", "bungiorno docteur", "priviet docteur"]
 
@@ -22,9 +25,10 @@ second_screen_index = 1
 [synonyms]
 "balance la suivante" = "musique suivante"
 
-# Raccourcis clavier Discord : action -> combinaison.
+# Raccourcis clavier Discord deja configures dans Discord : cles "mute" et "deafen" -> combinaison.
 [discord.hotkeys]
 mute = "ctrl+shift+m"
+deafen = "ctrl+shift+d"
 
 # Salons vocaux : nom parle -> identifiant Discord.
 [discord.channels]

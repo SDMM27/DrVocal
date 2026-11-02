@@ -29,6 +29,13 @@ class Settings:
     stt_device: str
     second_screen_index: int
     synonyms: dict[str, str] = field(default_factory=dict)
+    simulated_hotkeys_enabled: bool = False
+
+
+def _as_bool(value: object) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"booleen attendu, recu {value!r}")
+    return value
 
 
 def _read_toml(path: Path) -> dict:
@@ -63,6 +70,7 @@ def load_settings(config_path: Path, secrets_path: Path | None = None) -> Settin
             second_screen_index=int(data.get("second_screen_index", 1)),
             synonyms={str(k).strip().lower(): str(v).strip().lower()
                       for k, v in data.get("synonyms", {}).items()},
+            simulated_hotkeys_enabled=_as_bool(data.get("simulated_hotkeys_enabled", False)),
         )
     except (TypeError, ValueError, AttributeError) as e:
         raise ConfigError(f"Valeur invalide dans {config_path} : {e}") from e
