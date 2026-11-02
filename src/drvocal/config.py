@@ -30,6 +30,7 @@ class Settings:
     second_screen_index: int
     synonyms: dict[str, str] = field(default_factory=dict)
     simulated_hotkeys_enabled: bool = False
+    discord_owner_id: int = 0
 
 
 def _as_bool(value: object) -> bool:
@@ -71,6 +72,7 @@ def load_settings(config_path: Path, secrets_path: Path | None = None) -> Settin
             synonyms={str(k).strip().lower(): str(v).strip().lower()
                       for k, v in data.get("synonyms", {}).items()},
             simulated_hotkeys_enabled=_as_bool(data.get("simulated_hotkeys_enabled", False)),
+            discord_owner_id=int(discord.get("owner_id", 0)),
         )
     except (TypeError, ValueError, AttributeError) as e:
         raise ConfigError(f"Valeur invalide dans {config_path} : {e}") from e

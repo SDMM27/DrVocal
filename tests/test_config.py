@@ -82,3 +82,9 @@ def test_simulated_hotkeys_flag_defaults_off_and_loads(tmp_path):
     assert load_settings(write_config(tmp_path, "simulated_hotkeys_enabled = true")).simulated_hotkeys_enabled is True
     with pytest.raises(ConfigError):
         load_settings(write_config(tmp_path, 'simulated_hotkeys_enabled = "oui"'))
+
+
+def test_discord_owner_id(tmp_path):
+    assert load_settings(empty_config(tmp_path)).discord_owner_id == 0
+    s = load_settings(write_config(tmp_path, "[discord]\nowner_id = 42\n"))
+    assert s.discord_owner_id == 42
