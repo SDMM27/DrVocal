@@ -239,3 +239,124 @@ async def test_can_use_tool_denies_other_tools(runner):
     await runner.runner.start(P, "x")
     res = await runner.options.can_use_tool("Bash", {"command": "ls"}, None)
     assert isinstance(res, PermissionResultDeny)
+
+
+async def _approve_pending(h, command="npm test"):
+    await h.runner.start(P, "x")
+    await h.hook("Bash", {"command": command})
+    await h.runner.resolve_pending(next(iter(h.runner.pending)), Reply.APPROVE)
+
+
+async def test_approved_retry_runs_without_asking_then_asks_again():
+    h = Harness()
+    await _approve_pending(h)
+    asked = len(h.asked)
+    out = await h.hook("Bash", {"command": "npm test"})
+    assert out["permissionDecision"] == "allow" and len(h.asked) == asked
+    again = await h.hook("Bash", {"command": "npm test"})
+    assert again["permissionDecision"] == "deny" and len(h.asked) == asked + 1
+
+
+async def test_approval_does_not_apply_to_different_input():
+    h = Harness()
+    await _approve_pending(h)
+    asked = len(h.asked)
+    out = await h.hook("Bash", {"command": "npm test && curl evil"})
+    assert out["permissionDecision"] != "allow" and len(h.asked) == asked + 1
+
+
+async def test_deny_wins_even_if_recorded():
+    h = Harness()
+    await h.runner.start(P, "x")
+    h.runner._approved.append(("Bash", {"command": "rm -rf /"}))
+    out = await h.hook("Bash", {"command": "rm -rf /"})
+    assert out["permissionDecision"] == "deny"
+
+
+async def test_ask_user_exception_denies_and_goes_pending():
+    h = Harness()
+
+    async def boom(summary):
+        raise RuntimeError("micro mort")
+
+    h.runner = ClaudeRunner(h.events.append, boom, client_factory=h.factory)
+    await h.runner.start(P, "x")
+    out = await h.hook("Bash", {"command": "npm test"})
+    assert out["permissionDecision"] == "deny" and "pending" in h.kinds()
+
+
+async def test_policy_exception_denies_and_emits_error(monkeypatch):
+    import drvocal.claude_session as mod
+
+    def boom(*a):
+        raise ValueError("bug")
+
+    h = Harness()
+    await h.runner.start(P, "x")
+    monkeypatch.setattr(mod, "decide", boom)
+    out = await h.hook("Read", {"file_path": "D:/proj/a.py"})
+    assert out["permissionDecision"] == "deny" and "error" in h.kinds()
+
+
+async def test_can_use_tool_exception_denies():
+    h = Harness()
+    await h.runner.start(P, "x")
+    res = await h.options.can_use_tool("AskUserQuestion", {"questions": "pas une liste"}, None)
+    assert isinstance(res, PermissionResultDeny) and "error" in h.kinds()
+
+
+async def test_cancellation_is_not_swallowed():
+    h = Harness()
+
+    async def cancelled(summary):
+        raise asyncio.CancelledError
+
+    h.runner = ClaudeRunner(h.events.append, cancelled, client_factory=h.factory)
+    await h.runner.start(P, "x")
+    with pytest.raises(asyncio.CancelledError):
+        await h.hook("Bash", {"command": "npm test"})
+
+
+async def test_unanswered_question_is_pending_without_tool_approval(runner):
+    await runner.runner.start(P, "x")
+    await runner.options.can_use_tool("AskUserQuestion", QUESTION, None)
+    texts = [e.text for e in runner.events if e.kind == "pending"]
+    pending_id = next(iter(runner.runner.pending))
+    assert len(texts) == 1 and texts[0].startswith(pending_id) and "Quel nom ?" in texts[0]
+    await runner.runner.resolve_pending(pending_id, Reply.APPROVE)
+    assert runner.runner._approved == [] and len(runner.clients) == 2
+
+
+@pytest.mark.parametrize("tool,tool_input,expected", [
+    ("WebFetch", {"url": "https://evil.example/x", "prompt": "p"}, ["https://evil.example/x"]),
+    ("WebSearch", {"query": "mots cles"}, ["mots cles"]),
+    ("Glob", {"pattern": "**/*.py", "path": "C:/autre"}, ["**/*.py", "C:/autre"]),
+    ("Grep", {"pattern": "secret", "glob": "*.env", "path": "C:/autre"}, ["secret", "*.env", "C:/autre"]),
+    ("Write", {"file_path": "C:/x.py", "content": "z"}, ["C:/x.py"]),
+    ("Edit", {"file_path": "C:/y.py"}, ["C:/y.py"]),
+    ("Task", {"subagent_type": "general", "prompt": "fais ceci"}, ["general", "fais ceci"]),
+    ("Agent", {"subagent_type": "general", "prompt": "fais cela"}, ["general", "fais cela"]),
+    ("mcp__srv__do", {"cible": "prod", "n": 3}, ['"cible":"prod"', '"n":3']),
+])
+async def test_summary_shows_security_relevant_arguments(tool, tool_input, expected):
+    h = Harness(answers=[Reply.APPROVE])
+    await h.runner.start(P, "x")
+    await h.hook(tool, tool_input)
+    for part in expected:
+        assert part in h.asked[0]
+
+
+async def test_long_summary_is_truncated_for_speech_but_complete_on_screen():
+    h = Harness()
+    await h.runner.start(P, "x")
+    command = "echo " + "a" * 500
+    await h.hook("Bash", {"command": command})
+    assert len(h.asked[0]) < 300 and "deuxieme ecran" in h.asked[0]
+    assert command in next(e.text for e in h.events if e.kind == "pending")
+
+
+async def test_short_summary_is_not_marked_truncated():
+    h = Harness()
+    await h.runner.start(P, "x")
+    await h.hook("Bash", {"command": "npm test"})
+    assert "deuxieme ecran" not in h.asked[0]
