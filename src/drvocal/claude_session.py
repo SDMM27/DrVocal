@@ -27,7 +27,7 @@ from claude_agent_sdk import (
 from drvocal.claude_policy import Decision, Reply, decide
 
 _QUESTION_TOOL = "AskUserQuestion"
-_NO_ANSWER = "L'utilisateur n'a pas repondu."
+_NO_ANSWER = "L'utilisateur n'a pas répondu."
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,7 @@ class _Pending:
     summary: str
     tool: str | None = None  # None : simple question, aucune approbation d'outil
     tool_input: dict | None = None
+    screen_only: bool = False  # trop long pour une autorisation vocale
 
 
 @dataclass(frozen=True)
@@ -62,7 +63,7 @@ _SUMMARY_KEYS = {
     "Bash": ("command",),
     "PowerShell": ("command",),
 }
-_SPOKEN_SUFFIX = "... detail sur le deuxieme ecran"
+_SPOKEN_LIMIT = 200
 
 
 def _summary(tool: str, tool_input: dict) -> str:
@@ -75,11 +76,18 @@ def _summary(tool: str, tool_input: dict) -> str:
     return f"Claude veut utiliser {tool} : {details}" if details else f"Claude veut utiliser l'outil {tool}"
 
 
-def _spoken(summary: str, limit: int = 200) -> str:
-    """Version dite a voix haute : tronquee, en le signalant."""
-    if len(summary) <= limit:
-        return summary
-    return summary[:limit].rstrip() + _SPOKEN_SUFFIX
+def _fits_voice(summary: str, limit: int = _SPOKEN_LIMIT) -> bool:
+    """Un texte trop long ou sur plusieurs lignes ne peut pas etre autorise a la voix."""
+    return len(summary) <= limit and not any(c in summary for c in (chr(10), chr(13)))
+
+
+def _screen_text(pending_id: str, entry: "_Pending") -> str:
+    text = f"{pending_id}: {entry.summary}"
+    if entry.tool_input is not None:
+        text += "\n" + json.dumps(entry.tool_input, ensure_ascii=False, separators=(",", ":"), default=str)
+    if entry.screen_only:
+        text += "\nTrop long pour être lu : à autoriser sur le deuxième écran."
+    return text
 
 
 def _question_text(tool_input: dict) -> str:
@@ -117,11 +125,13 @@ class ClaudeRunner:
 
     async def start(self, project: Path, prompt: str) -> None:
         self._project, self._session_id = project, None
+        self.pending.clear()
+        self._approved.clear()
         await self._run(prompt)
 
     async def resume(self, prompt: str) -> None:
         if self._project is None or self._session_id is None:
-            self._emit(SessionEvent("error", "Aucune session Claude a reprendre."))
+            self._emit(SessionEvent("error", "Aucune session Claude à reprendre."))
             self._emit(SessionEvent("done", ""))
             return
         await self._run(prompt)
@@ -133,16 +143,16 @@ class ClaudeRunner:
             return False
         if reply is Reply.APPROVE:
             if entry.tool is None:
-                await self.resume(f"L'utilisateur n'a pas pu repondre a : {entry.summary}. Reformule ou continue.")
+                await self.resume(f"L'utilisateur n'a pas pu répondre à : {entry.summary}. Reformule ou continue.")
             else:
                 self._approved.append((entry.tool, entry.tool_input))  # une seule fois
-                await self.resume(f"L'utilisateur autorise : {entry.summary}. Tu peux reessayer cette action.")
+                await self.resume(f"L'utilisateur autorise : {entry.summary}. Tu peux réessayer cette action.")
         return True
 
     def _add_pending(self, entry: _Pending) -> None:
         pending_id = f"p{next(self._ids)}"
         self.pending[pending_id] = entry
-        self._emit(SessionEvent("pending", f"{pending_id}: {entry.summary}"))
+        self._emit(SessionEvent("pending", _screen_text(pending_id, entry)))
 
     def _options(self) -> ClaudeAgentOptions:
         return ClaudeAgentOptions(
@@ -162,6 +172,8 @@ class ClaudeRunner:
                     self._handle(message)
         except Exception as exc:  # limite d'usage, processus mort, connexion expiree...
             self._emit(SessionEvent("error", str(exc) or type(exc).__name__))
+        finally:
+            self._approved.clear()  # une approbation ne vaut que pour la reprise qui l'a suivie
         self._emit(SessionEvent("done", ""))
 
     def _handle(self, message: object) -> None:
@@ -202,18 +214,21 @@ class ClaudeRunner:
             self._approved.remove((tool, tool_input))
             return _verdict("allow")
         summary = _summary(tool, tool_input)
-        reply = await self._ask(f"{_spoken(summary)}. Dis oui docteur pour autoriser.")
+        if not _fits_voice(summary):
+            self._add_pending(_Pending(summary, tool, tool_input, screen_only=True))
+            return _verdict("deny", "Action trop longue pour une autorisation vocale ; en attente sur le deuxième écran.")
+        reply = await self._ask(f"{summary}. Dis oui docteur pour autoriser.")
         if reply is Reply.APPROVE:
             return _verdict("allow")
         if reply is Reply.REJECT:
-            return _verdict("deny", "L'utilisateur a refuse.")
+            return _verdict("deny", "L'utilisateur a refusé.")
         self._add_pending(_Pending(summary, tool, tool_input))
-        return _verdict("deny", "Pas de reponse de l'utilisateur ; l'action est en attente d'autorisation.")
+        return _verdict("deny", "Pas de réponse de l'utilisateur ; l'action est en attente d'autorisation.")
 
     async def _can_use_tool(self, tool, tool_input, context):
         try:
             if tool != _QUESTION_TOOL:
-                return PermissionResultDeny(message="Outil non autorise par Dr Vocal.")
+                return PermissionResultDeny(message="Outil non autorisé par Dr Vocal.")
             text = _question_text(tool_input)
             answer = await self._ask(text)
             if not isinstance(answer, str):

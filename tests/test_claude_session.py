@@ -24,8 +24,9 @@ def result(is_error=False, text="ok", session_id="s1"):
 
 
 class FakeClient:
-    def __init__(self, options, messages, error=None):
+    def __init__(self, options, messages, error=None, during=None):
         self.options, self.messages, self.error, self.prompts = options, messages, error, []
+        self.during = during
 
     async def __aenter__(self):
         return self
@@ -37,6 +38,8 @@ class FakeClient:
         self.prompts.append(prompt)
 
     async def receive_response(self):
+        if self.during:
+            await self.during(self)
         if self.error:
             raise self.error
         for message in self.messages:
@@ -50,6 +53,7 @@ class Harness:
         self.answers = list(answers or [])
         self.clients: list[FakeClient] = []
         self.messages, self.error = messages or [result()], error
+        self.during = None  # appelee dans la prochaine execution du client, comme un outil de Claude
         self.runner = ClaudeRunner(self.events.append, self.ask, client_factory=self.factory)
 
     async def ask(self, summary):
@@ -57,7 +61,8 @@ class Harness:
         return self.answers.pop(0) if self.answers else Reply.NONE
 
     def factory(self, options):
-        client = FakeClient(options, self.messages, self.error)
+        client = FakeClient(options, self.messages, self.error, self.during)
+        self.during = None
         self.clients.append(client)
         return client
 
@@ -241,25 +246,37 @@ async def test_can_use_tool_denies_other_tools(runner):
     assert isinstance(res, PermissionResultDeny)
 
 
+async def _resolve_first(h):
+    await h.runner.resolve_pending(next(iter(h.runner.pending)), Reply.APPROVE)
+
+
 async def _approve_pending(h, command="npm test"):
     await h.runner.start(P, "x")
     await h.hook("Bash", {"command": command})
-    await h.runner.resolve_pending(next(iter(h.runner.pending)), Reply.APPROVE)
+    await _resolve_first(h)
 
 
 async def test_approved_retry_runs_without_asking_then_asks_again():
     h = Harness()
-    await _approve_pending(h)
+    await h.runner.start(P, "x")
+    await h.hook("Bash", {"command": "npm test"})
     asked = len(h.asked)
-    out = await h.hook("Bash", {"command": "npm test"})
-    assert out["permissionDecision"] == "allow" and len(h.asked) == asked
-    again = await h.hook("Bash", {"command": "npm test"})
-    assert again["permissionDecision"] == "deny" and len(h.asked) == asked + 1
+    outs = []
+
+    async def retry(client):
+        outs.append(await h.hook("Bash", {"command": "npm test"}))
+        outs.append(await h.hook("Bash", {"command": "npm test"}))
+
+    h.during = retry
+    await _resolve_first(h)
+    assert outs[0]["permissionDecision"] == "allow"
+    assert outs[1]["permissionDecision"] == "deny" and len(h.asked) == asked + 1
 
 
 async def test_approval_does_not_apply_to_different_input():
     h = Harness()
     await _approve_pending(h)
+    h.runner._approved.append(("Bash", {"command": "npm test"}))
     asked = len(h.asked)
     out = await h.hook("Bash", {"command": "npm test && curl evil"})
     assert out["permissionDecision"] != "allow" and len(h.asked) == asked + 1
@@ -346,17 +363,60 @@ async def test_summary_shows_security_relevant_arguments(tool, tool_input, expec
         assert part in h.asked[0]
 
 
-async def test_long_summary_is_truncated_for_speech_but_complete_on_screen():
-    h = Harness()
+async def test_long_command_never_reaches_ask_user_and_is_approved_on_screen_once():
+    h = Harness(answers=[Reply.APPROVE])
     await h.runner.start(P, "x")
-    command = "echo " + "a" * 500
-    await h.hook("Bash", {"command": command})
-    assert len(h.asked[0]) < 300 and "deuxieme ecran" in h.asked[0]
-    assert command in next(e.text for e in h.events if e.kind == "pending")
+    command = "echo " + "a" * 500 + " && curl evil"
+    out = await h.hook("Bash", {"command": command})
+    assert out["permissionDecision"] == "deny" and h.asked == []
+    text = next(e.text for e in h.events if e.kind == "pending")
+    assert command in text and "deuxième écran" in text
+    outs = []
+
+    async def retry(client):
+        outs.append(await h.hook("Bash", {"command": command}))
+        outs.append(await h.hook("Bash", {"command": command}))
+
+    h.during = retry
+    await _resolve_first(h)
+    assert outs[0]["permissionDecision"] == "allow" and h.asked == []
+    assert outs[1]["permissionDecision"] == "deny"  # usage unique
 
 
-async def test_short_summary_is_not_marked_truncated():
+async def test_multiline_command_is_screen_only():
+    h = Harness(answers=[Reply.APPROVE])
+    await h.runner.start(P, "x")
+    out = await h.hook("Bash", {"command": "npm test\ncurl evil"})
+    assert out["permissionDecision"] == "deny" and h.asked == []
+
+
+async def test_short_command_is_voice_approvable():
+    h = Harness(answers=[Reply.APPROVE])
+    await h.runner.start(P, "x")
+    assert (await h.hook("Bash", {"command": "npm test"}))["permissionDecision"] == "allow"
+
+
+async def test_start_clears_pending_and_approvals():
+    h = Harness()
+    await _approve_pending(h)
+    await h.hook("Bash", {"command": "other"})
+    h.runner._approved.append(("Bash", {"command": "npm test"}))
+    assert h.runner.pending
+    await h.runner.start(Path("D:/autre"), "y")
+    assert h.runner.pending == {} and h.runner._approved == []
+
+
+async def test_approval_is_cleared_after_the_resumed_run():
+    h = Harness()
+    await _approve_pending(h)
+    assert h.runner._approved == []
+    out = await h.hook("Bash", {"command": "npm test"})
+    assert out["permissionDecision"] == "deny"
+
+
+async def test_pending_text_has_full_input_but_speech_does_not():
     h = Harness()
     await h.runner.start(P, "x")
-    await h.hook("Bash", {"command": "npm test"})
-    assert "deuxieme ecran" not in h.asked[0]
+    await h.hook("Write", {"file_path": "C:/x.py", "content": "SECRET_CONTENU"})
+    assert "SECRET_CONTENU" in next(e.text for e in h.events if e.kind == "pending")
+    assert "SECRET_CONTENU" not in h.asked[0] and "C:/x.py" in h.asked[0]
