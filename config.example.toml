@@ -18,6 +18,10 @@ second_screen_index = 1
 [projects]
 "Dr Vocal" = "D:/NasaCode/DrVocal"
 
+# Synonymes : phrase dite -> phrase canonique reconnue (enonce entier, minuscules).
+[synonyms]
+"balance la suivante" = "musique suivante"
+
 # Raccourcis clavier Discord : action -> combinaison.
 [discord.hotkeys]
 mute = "ctrl+shift+m"

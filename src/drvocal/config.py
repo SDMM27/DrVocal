@@ -1,6 +1,6 @@
 """Chargement des reglages (config.toml) et des secrets (secrets.toml)."""
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_WAKE_PHRASES = [
@@ -28,6 +28,7 @@ class Settings:
     stt_model: str
     stt_device: str
     second_screen_index: int
+    synonyms: dict[str, str] = field(default_factory=dict)
 
 
 def _read_toml(path: Path) -> dict:
@@ -60,6 +61,8 @@ def load_settings(config_path: Path, secrets_path: Path | None = None) -> Settin
             stt_model=str(data.get("stt_model", "small")),
             stt_device=str(data.get("stt_device", "cpu")),
             second_screen_index=int(data.get("second_screen_index", 1)),
+            synonyms={str(k).strip().lower(): str(v).strip().lower()
+                      for k, v in data.get("synonyms", {}).items()},
         )
     except (TypeError, ValueError, AttributeError) as e:
         raise ConfigError(f"Valeur invalide dans {config_path} : {e}") from e

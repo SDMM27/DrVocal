@@ -69,3 +69,9 @@ def test_discord_sections_are_loaded(tmp_path):
 def test_missing_config_raises_config_error(tmp_path):
     with pytest.raises(ConfigError):
         load_settings(tmp_path / "nope.toml")
+
+
+def test_synonyms_are_normalised_and_default_empty(tmp_path):
+    assert load_settings(empty_config(tmp_path)).synonyms == {}
+    s = load_settings(write_config(tmp_path, '[synonyms]\n" Balance la Suivante " = " Musique Suivante"'))
+    assert s.synonyms == {"balance la suivante": "musique suivante"}

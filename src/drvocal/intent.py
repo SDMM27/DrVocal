@@ -30,7 +30,7 @@ def _rx(pattern: str) -> re.Pattern[str]:
     return re.compile(pattern.replace(" ", r"\s+").replace("~", r"[-\s]+"))
 
 
-_DE = r"(?:(?:de|d'|que|qu')\s*)?"
+_DE = r"(?:(?:de|que)\s+|d'|qu')?"
 
 # Ordre significatif : les regles specifiques passent avant "mets <query>".
 _SIMPLE_RULES = [
@@ -50,6 +50,10 @@ _CONTINUE = _rx(rf"^continue avec claude {_DE}(.+)$")
 _PLAY = _rx(r"^(?:mets|joue|lance) (.+)$")
 
 
+def _words(name: str) -> str:
+    return r"\s+".join(re.escape(w) for w in _fold(name).split())
+
+
 def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().strip(".,;:!?…¿¡ ")).strip()
 
@@ -57,7 +61,7 @@ def _clean(text: str) -> str:
 def _split_channel(rest: str, rest_orig: str, settings: Settings) -> tuple[str, str] | None:
     """Separe '<salon> <texte>' : salon connu (le plus long d'abord), sinon premier mot."""
     for name in sorted(settings.discord_channels, key=len, reverse=True):
-        m = re.match(rf"({_fold(name).replace(' ', r'\s+')})\s+(.+)$", rest)
+        m = re.match(rf"({_words(name)})\s+(.+)$", rest)
         if m:
             return rest_orig[:m.end(1)], rest_orig[m.start(2):]
     m = re.match(r"(\S+)\s+(.+)$", rest)
@@ -71,6 +75,10 @@ def parse(text: str, settings: Settings) -> Intent | None:
     if not orig:
         return None
     t = _fold(orig)
+    canonical = {_fold(_clean(k)): v for k, v in settings.synonyms.items()}
+    if t in canonical:
+        orig = _clean(canonical[t])
+        t = _fold(orig)
 
     for action, rx in _SIMPLE_RULES:
         if rx.match(t):
@@ -80,7 +88,7 @@ def parse(text: str, settings: Settings) -> Intent | None:
         return Intent("spotify.volume", {"level": m.group(1)})
 
     for name in sorted(settings.projects, key=len, reverse=True):
-        key = _fold(name).replace(" ", r"\s+")
+        key = _words(name)
         rx = _rx(rf"^(?:demande|dis) (?:a|à) claude (?:sur|dans|pour|avec) ({key}) {_DE}(.+)$")
         if m := rx.match(t):
             return Intent("claude.prompt", {"project": name, "prompt": orig[m.start(2):]})
