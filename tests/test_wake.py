@@ -104,14 +104,14 @@ def count_wakes(audio: np.ndarray) -> int:
 
 needs_models = pytest.mark.skipif(
     not list(WAKE_MODELS.glob("*.onnx")),
-    reason="models/wake/ absent : lancer `uv run python tools/train_wake.py \"salut docteur\"`",
+    reason="models/wake/ absent : lancer `uv run python tools/train_wake.py \"salut doc vocal\"`",
 )
 
 
 @pytest.mark.slow
 @needs_models
 def test_detects_wake_fixture():
-    assert count_wakes(load_wav("salut_docteur.wav")) == 1
+    assert count_wakes(load_wav("salut_doc_vocal.wav")) == 1
 
 
 @pytest.mark.slow
@@ -124,3 +124,9 @@ def test_ignores_conversation_fixture():
 @needs_models
 def test_docteur_alone_does_not_wake():
     assert count_wakes(load_wav("docteur_seul.wav")) == 0
+
+
+@pytest.mark.slow
+@needs_models
+def test_old_phrase_does_not_wake():
+    assert count_wakes(load_wav("salut_docteur.wav")) == 0

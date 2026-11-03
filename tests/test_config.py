@@ -21,8 +21,7 @@ def test_defaults_notes_dir_to_documents_notes(tmp_path):
 
 
 def test_default_wake_phrases(tmp_path):
-    assert set(load_settings(empty_config(tmp_path)).wake_phrases) == {
-        "salut docteur", "bonjour docteur", "bungiorno docteur", "priviet docteur"}
+    assert load_settings(empty_config(tmp_path)).wake_phrases == ["salut doc vocal"]
 
 
 def test_project_names_are_normalised(tmp_path):

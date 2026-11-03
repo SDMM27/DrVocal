@@ -1,6 +1,6 @@
 """Enregistre la voix de l'utilisateur pour entrainer et evaluer le mot de reveil.
 
-    uv run python tools/record_voice.py [--takes 40]
+    uv run python tools/record_voice.py [--takes 80]
 
 Chaque phrase s'affiche, il suffit de la dire avant la fin de la barre. Ctrl+C
 arrete, et relancer reprend ou l'on s'est arrete. Tout reste dans data/voice/,
@@ -21,14 +21,18 @@ SAMPLE_RATE = 16000
 TAKE_S = 2.5
 PAUSE_S = 0.5
 
-WAKE_PHRASES = ["salut docteur", "bonjour docteur", "bungiorno docteur", "priviet docteur"]
+WAKE_PHRASES = ["salut doc vocal"]
 # Phrases proches qui ne doivent pas reveiller : servent a mesurer les faux reveils.
 NEGATIVE_PHRASES = [
-    "salut", "bonjour", "docteur", "salut les gars", "bonjour tout le monde",
-    "le docteur est parti", "salut mon pote", "bien joue docteur",
-    "passe la balle", "je vais au but", "attention derriere toi", "on a gagne",
+    # pieges : morceaux de la phrase ou mots qui sonnent pareil
+    "salut", "salut doc", "doc", "vocal", "docteur", "salut docteur",
+    "message vocal", "chat vocal", "le doc est la", "salut les gars",
+    "salut mon pote", "bien joue docteur",
+    # discussion de jeu ordinaire
+    "bonjour tout le monde", "passe la balle", "je vais au but",
+    "attention derriere toi", "on a gagne",
 ]
-NEGATIVE_TAKES = 3
+NEGATIVE_TAKES = 5
 
 
 def slug(phrase: str) -> str:
@@ -82,7 +86,7 @@ def record_phrase(phrase: str, folder: Path, takes: int) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--takes", type=int, default=40, help="prises par phrase de reveil")
+    ap.add_argument("--takes", type=int, default=80, help="prises par phrase de reveil")
     ap.add_argument("--out", type=Path, default=ROOT / "data" / "voice")
     args = ap.parse_args()
 

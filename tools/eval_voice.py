@@ -35,7 +35,7 @@ RATE = train_wake.RATE
 LEAD_FRAMES = 12
 TAIL_FRAMES = 12
 THRESHOLDS = [0.3, 0.5, 0.7, 0.9]
-SPLITS = {"train": (0, 23), "val": (24, 31), "test": (32, 39)}
+SPLITS = {"train": (0, 55), "val": (56, 67), "test": (68, 79)}
 ROOT = train_wake.ROOT
 VOICE = ROOT / "data" / "voice"
 
@@ -123,7 +123,7 @@ def synthetic_negatives(work: Path) -> list[tuple[str, np.ndarray]]:
     """Negatifs synthetiques (voix et phrases d'evaluation, jamais entraines)."""
     synth = train_wake.Synth(work / "cache")
     sentences = [s.strip() for s in train_wake.EVAL_SENTENCES.read_text(encoding="utf-8").splitlines() if s.strip()]
-    sentences += ["docteur", "salut", "bonjour", "priviet", "bungiorno"]
+    sentences += ["docteur", "salut", "salut doc", "doc", "vocal", "salut docteur", "message vocal"]
     out = []
     for k, (voice, spk) in enumerate(train_wake.EVAL_VOICES):
         for text in sentences:
@@ -169,7 +169,7 @@ def print_report(res: dict, n_models: int) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--models", type=Path, default=ROOT / "models" / "wake_voice")
-    ap.add_argument("--phrases", nargs="*", default=["salut_docteur", "bonjour_docteur", "bungiorno_docteur", "priviet_docteur"])
+    ap.add_argument("--phrases", nargs="*", default=["salut_doc_vocal"])
     ap.add_argument("--split", choices=list(SPLITS), default="val")
     ap.add_argument("--negatives", nargs="*", default=[], help="slugs de data/voice/negative a utiliser")
     ap.add_argument("--synthetic-negatives", action="store_true")

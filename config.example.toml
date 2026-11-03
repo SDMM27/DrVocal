@@ -5,7 +5,7 @@
 simulated_hotkeys_enabled = false
 
 # Phrases d'activation (minuscules).
-wake_phrases = ["salut docteur", "bonjour docteur", "bungiorno docteur", "priviet docteur"]
+wake_phrases = ["salut doc vocal"]
 
 # Dossier des notes (defaut : Documents/NOTES).
 # notes_dir = "C:/Users/moi/Documents/NOTES"

@@ -3,12 +3,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-DEFAULT_WAKE_PHRASES = [
-    "salut docteur",
-    "bonjour docteur",
-    "bungiorno docteur",
-    "priviet docteur",
-]
+DEFAULT_WAKE_PHRASES = ["salut doc vocal"]
 
 
 class ConfigError(Exception):

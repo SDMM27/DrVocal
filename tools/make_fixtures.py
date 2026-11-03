@@ -26,6 +26,7 @@ GAP_S = 0.4
 FIXTURES: dict[str, tuple[str, str | list[str]]] = {
     "mets_daft_punk.wav": ("fr_FR-siwis-medium", "mets daft punk"),
     "ouvre_discord.wav": ("fr_FR-siwis-medium", "ouvre discord"),
+    "salut_doc_vocal.wav": ("fr_FR-tom-medium", "salut doc vocal"),
     "salut_docteur.wav": ("fr_FR-tom-medium", "salut docteur"),
     "docteur_seul.wav": ("fr_FR-tom-medium", "docteur"),
     "conversation.wav": (

@@ -10,7 +10,7 @@ L'utilisateur joue à Rocket League, CS2, Red Dead Redemption 2, Pummel Party et
 
 ## Objectifs
 
-1. **Réveil vocal** par une salutation suivie de « docteur » : « salut docteur », « bonjour docteur », « bungiorno docteur », « priviet docteur ». La liste est modifiable.
+1. **Réveil vocal** par une seule phrase au départ : « salut doc vocal » (écrite ainsi pour la synthèse et la transcription). Les quatre salutations avec « docteur » ont été abandonnées le 2026-11-03 : moins de la moitié étaient reconnues et « docteur » seul réveillait (voir `docs/mesures.md`). La liste est modifiable.
 2. **Spotify** (compte Premium) : lancer un titre, un album, un artiste ou une playlist par son nom ; pause, reprise, suivant, précédent, volume.
 3. **Discord, sa propre voix** : se muter, se mettre en sourdine, en simulant les raccourcis globaux déjà configurés par l'utilisateur.
 4. **Discord, serveurs dont l'utilisateur est administrateur** : écrire un message, se déplacer de salon vocal, muter un autre utilisateur.
