@@ -110,6 +110,16 @@ async def amain(settings: Settings, screen) -> None:
     background: set[asyncio.Task] = set()
     _register_optional(catalogue, settings, ears, speaker, background)
 
+    async def preload_stt() -> None:
+        try:
+            await asyncio.to_thread(transcriber.preload)  # sinon la premiere commande attend ~20 s
+        except Exception:
+            log.exception("prechargement de la transcription impossible")
+
+    preload = loop.create_task(preload_stt())
+    background.add(preload)
+    preload.add_done_callback(background.discard)
+
     assistant = Assistant(ears, detector, capture_command, lambda text: parse(text, settings),
                           catalogue, player, speaker, notify=lambda text: push(SessionEvent("text", text)))
     try:

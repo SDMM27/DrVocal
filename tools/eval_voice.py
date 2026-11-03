@@ -2,9 +2,9 @@
 
     uv run python tools/eval_voice.py --check
     uv run python tools/eval_voice.py --split val --synthetic-negatives
-    uv run python tools/eval_voice.py --split test --negatives salut docteur salut_les_gars le_docteur_est_parti
+    uv run python tools/eval_voice.py --split test --negatives message_vocal le_doc_est_la salut_les_gars on_a_gagne
 
-Les quatre modeles tournent ensemble dans le vrai `WakeDetector` (openwakeword.Model
+Les modeles du dossier tournent ensemble dans le vrai `WakeDetector` (openwakeword.Model
 charge comme a l'execution). Chaque WAV est diffuse trame par trame (80 ms) avec
 12 trames de silence avant et apres. Les scores sont enregistres une fois par WAV
 puis rejoues dans `WakeDetector` a chaque seuil (delai de reprise compris).
@@ -13,7 +13,7 @@ puis rejoues dans `WakeDetector` a chaque seuil (delai de reprise compris).
 - faux reveil : tout reveil sur un negatif, silence ajoute compris ;
 - croisement : un modele seul (`only=`) qui se declenche sur la phrase d'un autre.
 
-`--split train` = prises 000-023 (diagnostic en echantillon), `--split val` = prises 024-031 (choix du seuil), `--split test` = prises 032-039
+`--split train` = prises 000-055 (diagnostic en echantillon), `--split val` = prises 056-067 (choix du seuil), `--split test` = prises 068-079
 (a ne regarder qu'une fois). Les fichiers de data/voice/ ne sont jamais deplaces.
 """
 from __future__ import annotations
