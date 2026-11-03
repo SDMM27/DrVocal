@@ -40,6 +40,29 @@ def test_unknown_or_forbidden_gives_none(text, settings):
     assert parse(text, settings) is None
 
 
+# Transcriptions reelles ou mesurees de "mets daft punk" avec faster-whisper small.
+@pytest.mark.parametrize("text,query", [
+    ("Medaft Punk", "daft Punk"),
+    ("Mais d'aft punk.", "d'aft punk"),
+    ("mais du Daft Punk.", "Daft Punk"),
+    ("Mets du Daft Punk", "Daft Punk"),
+    ("joue des", "des"),
+    ("Mais d'arrière ! Mais d'arrière !", "d'arrière"),
+    ("joue d'Ariana sur Spotify", "d'Ariana"),
+    ("Je joue Daryana sur Spotify.", "Daryana"),
+    ("mets Daft Punk dans Spotify", "Daft Punk"),
+    ("mets sur spotify", "sur spotify"),
+])
+def test_misheard_play_is_still_play(text, query, settings):
+    assert parse(text, settings) == Intent("spotify.play", {"query": query})
+
+
+@pytest.mark.parametrize("text", [
+    "merci", "message", "mais non je rigole pas du tout", "mais", "medaft"])
+def test_misheard_play_rejects_ordinary_speech(text, settings):
+    assert parse(text, settings) is None
+
+
 def test_unknown_project_gives_none(settings):
     assert parse("demande à claude sur inconnu de corriger le test", settings) is None
 
@@ -80,3 +103,36 @@ def test_project_name_with_regex_chars(settings):
 
 def test_pause_with_trailing_words_gives_none(settings):
     assert parse("pause demain", settings) is None
+
+
+def test_different_sentences_are_not_merged(settings):
+    assert parse("Pause. Musique suivante.", settings) is None
+
+
+@pytest.mark.parametrize("text,query", [
+    ("J'ouvre ma playlist Disco tier 4 sur Spotify.", "Disco tier 4"),
+    ("Je vous ma playlist Rital list sur Spotify.", "Rital list"),
+    ("lance ma playlist sport", "sport"),
+    ("mets la playlist de chill", "chill"),
+])
+def test_my_playlist_anywhere_in_short_sentence(text, query, settings):
+    assert parse(text, settings) == Intent("spotify.play", {"query": query, "kind": "playlist"})
+
+
+@pytest.mark.parametrize("text", ["lance le DJ sur Spotify", "mets le DJ", "DJ", "lance le di-jay",
+                                  "Laisse le DJ.", "Là c'est DJ"])
+def test_dj(text, settings):
+    assert parse(text, settings) == Intent("spotify.dj", {})
+
+
+def test_playlist_inside_discord_message_stays_a_message(settings):
+    assert parse("écris dans général la playlist est cool", settings).action == "discord.message"
+
+
+def test_artist_named_dj_is_still_a_search(settings):
+    assert parse("mets DJ Snake", settings) == Intent("spotify.play", {"query": "DJ Snake"})
+
+
+@pytest.mark.parametrize("text", ["mets de la musique", "lance la musique", "joue de la musique sur Spotify"])
+def test_generic_music_request_resumes(text, settings):
+    assert parse(text, settings) == Intent("spotify.resume", {})
