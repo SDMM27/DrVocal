@@ -1,4 +1,5 @@
 import asyncio
+import wave
 from pathlib import Path
 
 import numpy as np
@@ -384,3 +385,32 @@ def test_event_handler_sounds_and_push():
         on_event(SessionEvent(kind, "x"))
     assert player.played == ["done", "failure"]
     assert len(pushed) == 5
+
+
+async def test_listen_keeps_debug_capture_including_silent_ones(tmp_path):
+    ears = Ears(feed([SPEECH, SPEECH, *SILENCE_END, *[SILENT] * 8]), lambda a: "pause", lambda: is_speech, tmp_path)
+    pump = asyncio.create_task(ears.pump(lambda f: None))
+    assert await ears.listen(700, 240, 15000) == "pause"
+    assert await ears.listen(700, 240, 15000) is None  # aucune parole : garde aussi
+    pump.cancel()
+    files = sorted(tmp_path.glob("*.wav"))
+    assert len(files) == 2
+    with wave.open(str(files[0])) as w:
+        assert (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (16000, 1, 2)
+
+
+async def test_listen_without_captures_dir_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    ears = Ears(feed([SPEECH, *SILENCE_END]), lambda a: "pause", lambda: is_speech)
+    pump = asyncio.create_task(ears.pump(lambda f: None))
+    await ears.listen(700, 240, 15000)
+    pump.cancel()
+    assert list(tmp_path.rglob("*.wav")) == []
+
+
+def test_debug_captures_are_capped(tmp_path):
+    ears = Ears(feed([]), lambda a: "", lambda: is_speech, tmp_path)
+    for i in range(25):
+        (tmp_path / f"2000-01-01_00-00-{i:02d}-000000.wav").write_bytes(b"")
+    ears._keep_capture([frame(SPEECH)])
+    assert len(list(tmp_path.glob("*.wav"))) == 20

@@ -26,6 +26,23 @@ def test_model_is_not_loaded_until_first_use():
     assert not t.loaded
 
 
+def test_transcribes_french_with_beam_search_without_vad():
+    seen = {}
+
+    class Segment:
+        text = " Lance MC Pao "
+
+    class Model:
+        def transcribe(self, samples, **kwargs):
+            seen.update(kwargs)
+            return [Segment()], None
+
+    t = Transcriber("small", "cpu")
+    t._model = Model()
+    assert t.transcribe(np.zeros(1600, dtype=np.int16)) == "Lance MC Pao"
+    assert seen["language"] == "fr" and seen["beam_size"] == 5 and seen["vad_filter"] is False
+
+
 def test_unload_releases_model():
     t = Transcriber("small", "cpu")
     t._model = object()

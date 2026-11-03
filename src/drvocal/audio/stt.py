@@ -6,6 +6,9 @@ from typing import Any
 import numpy as np
 
 
+BEAM_SIZE = 5
+
+
 class Transcriber:
     """Transcription faster-whisper en francais, modele charge a la demande."""
 
@@ -38,7 +41,9 @@ class Transcriber:
         model = self._ensure_loaded()
         samples = audio.astype(np.float32) / 32768.0
         segments, _info = model.transcribe(
-            samples, language="fr", beam_size=1, vad_filter=False
+            # beam 5 : meme duree mesuree sur un ordre reel (1,7 s), noms mieux transcrits
+            # ("MCPOW FOSS RICESSE" -> "MCPOW, fausse richesse"), voir docs/mesures.md.
+            samples, language="fr", beam_size=BEAM_SIZE, vad_filter=False
         )
         return " ".join(s.text.strip() for s in segments).strip()
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import unicodedata
+import wave
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,7 +15,7 @@ import numpy as np
 
 from drvocal.actions import Catalogue, Outcome
 from drvocal.actions_notes import save_note
-from drvocal.audio.mic import FRAME_MS
+from drvocal.audio.mic import FRAME_MS, SAMPLE_RATE
 from drvocal.audio.vad import capture_utterance
 from drvocal.audio.wake import WakeEngine
 from drvocal.claude_policy import Reply, parse_reply
@@ -25,6 +26,7 @@ from drvocal.intent import Intent
 log = logging.getLogger(__name__)
 
 _TRAILING_FRAMES = 2  # trames gardees apres le relachement de la touche
+_KEPT_CAPTURES = 20  # diagnostic : nombre de WAV gardes dans captures_dir
 
 
 @dataclass(frozen=True)
@@ -57,7 +59,10 @@ class Ears:
         frames: AsyncIterator[np.ndarray],
         transcribe: Callable[[np.ndarray], str],
         is_speech_factory: Callable[[], Callable[[np.ndarray], bool]],
+        captures_dir: Path | None = None,
     ) -> None:
+        """`captures_dir` (diagnostic, DEBUG seulement) : chaque ecoute y est gardee en WAV."""
+        self._captures_dir = captures_dir
         self._frames = frames
         self._transcribe = transcribe
         self._is_speech_factory = is_speech_factory
@@ -100,15 +105,40 @@ class Ears:
     async def listen(self, silence_ms: int, no_speech_timeout_ms: int, max_ms: int) -> str | None:
         async with self._lock:
             queue = self._open()
+            heard: list[np.ndarray] = []
+
+            async def tee() -> AsyncIterator[np.ndarray]:
+                async for frame in self._drain(queue):
+                    heard.append(frame)
+                    yield frame
+
             try:
                 audio = await capture_utterance(
-                    self._drain(queue), silence_ms, no_speech_timeout_ms, max_ms,
-                    is_speech=self._is_speech_factory())
+                    tee(), silence_ms, no_speech_timeout_ms, max_ms, is_speech=self._is_speech_factory())
             finally:
                 self._queue = None
+            self._keep_capture(heard)
             if audio is None:
+                peak = max((int(np.abs(f).max()) for f in heard), default=0)
+                log.info("aucune parole apres l'ecoute (%d ms, crete %d/32767)", len(heard) * FRAME_MS, peak)
                 return None
             return await self._text(audio)
+
+    def _keep_capture(self, frames: list[np.ndarray]) -> None:
+        if self._captures_dir is None or not frames:
+            return
+        try:
+            self._captures_dir.mkdir(parents=True, exist_ok=True)
+            path = self._captures_dir / f"{datetime.now():%Y-%m-%d_%H-%M-%S-%f}.wav"
+            with wave.open(str(path), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(SAMPLE_RATE)
+                w.writeframes(np.concatenate(frames).astype(np.int16).tobytes())
+            for old in sorted(self._captures_dir.glob("*.wav"))[:-_KEPT_CAPTURES]:
+                old.unlink()
+        except OSError:
+            log.exception("capture de diagnostic impossible")
 
     async def record_while(self, held: Callable[[], bool], max_ms: int, min_ms: int = 300) -> str | None:
         """Enregistre tant que `held()` est vrai (verifie a chaque trame), plus 2 trames de traine."""

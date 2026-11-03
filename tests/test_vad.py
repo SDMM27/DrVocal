@@ -1,6 +1,6 @@
 import numpy as np
 
-from drvocal.audio.vad import FRAME_SAMPLES, capture_utterance
+from drvocal.audio.vad import FRAME_SAMPLES, capture_utterance, speech_confirmer
 
 
 def energy_is_speech(frame: np.ndarray) -> bool:
@@ -39,6 +39,25 @@ async def test_capture_stops_after_silence():
     assert 5 * FRAME_SAMPLES <= len(result) <= 14 * FRAME_SAMPLES
 
 
+async def test_capture_keeps_frames_just_before_speech():
+    marker = np.full(FRAME_SAMPLES, 7, dtype=np.int16)  # sous le seuil d'energie
+    frames = agen([quiet()] * 5 + [marker] + [loud()] * 3 + [quiet()] * 10)
+    result = await capture_utterance(
+        frames, silence_ms=160, no_speech_timeout_ms=2000, is_speech=energy_is_speech, preroll_ms=160
+    )
+    assert np.array_equal(result[:FRAME_SAMPLES], quiet())
+    assert np.array_equal(result[FRAME_SAMPLES:2 * FRAME_SAMPLES], marker)
+    assert len(result) == (2 + 3 + 2) * FRAME_SAMPLES
+
+
+async def test_capture_without_preroll_starts_at_speech():
+    frames = agen([quiet()] * 5 + [loud()] * 3 + [quiet()] * 10)
+    result = await capture_utterance(
+        frames, silence_ms=160, no_speech_timeout_ms=2000, is_speech=energy_is_speech, preroll_ms=0
+    )
+    assert len(result) == (3 + 2) * FRAME_SAMPLES
+
+
 async def test_capture_caps_at_max_ms():
     frames = agen([loud()] * 100)
     result = await capture_utterance(
@@ -55,6 +74,13 @@ async def test_capture_returns_none_when_stream_ends_without_speech():
         is_speech=energy_is_speech,
     )
     assert result is None
+
+
+def test_speech_confirmer_needs_enough_speech_frames():
+    confirm = speech_confirmer(energy_is_speech, min_speech_ms=240)
+    assert confirm([quiet()] * 10 + [loud()] * 3)
+    assert not confirm([quiet()] * 10 + [loud()] * 2)
+    assert not confirm([])
 
 
 def test_silero_detects_speech_fixture_and_rejects_silence():

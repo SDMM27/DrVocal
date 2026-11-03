@@ -109,3 +109,36 @@ Source : `tools/bench_stt.py` (fixtures de synthese `tests/fixtures`, 2 phrases)
 | tous | cuda | indisponible (`cublas64_12.dll` manquant) | | |
 
 Lecture : `small` sur processeur reste le seul choix raisonnable sans carte graphique, mais depasse la cible de 1 s. L'exactitude sur 2 phrases de synthese ne dit rien de la vraie voix. Reglage garde : `stt_model = "small"`, `stt_device = "cpu"`. A trancher en jeu (Tache 12) : installer les bibliotheques CUDA 12 pour essayer la carte graphique (au risque de prendre des ressources au jeu), ou accepter ~1,4 s. Le premier appel (chargement, 18 s) doit se faire au demarrage, pas a la premiere commande.
+
+## Patience du reveil (trames d'affilee), 2026-11-03
+
+Contexte : en usage reel (seuil 0,5 puis 0,7), des bips de reveil sans que l'utilisateur parle, souvent avec de la musique sur les haut-parleurs. Source : `models/wake/salut_doc_vocal.onnx` diffuse par trames de 80 ms (12 trames de silence avant et apres) sur les prises reelles 056-079 (24, jamais entrainees) et les 91 negatifs reels de `data/voice/negative` (une partie a servi de negatifs difficiles a l'entrainement : chiffres optimistes).
+
+| Seuil | 1 trame | 2 trames d'affilee | 3 trames d'affilee |
+|---|---|---|---|
+| 0,5 | 22/24, 2 faux | 21/24, 0 faux | 18/24, 0 faux |
+| 0,7 | 22/24, 2 faux | 21/24, 0 faux | 18/24, 0 faux |
+| 0,9 | 21/24, 2 faux | 21/24, 0 faux | 18/24, 0 faux |
+
+Choix : `patience = 2` (160 ms au-dessus du seuil) dans `WakeDetector`, seuil 0,7. Chaque reveil est journalise avec son score. Non mesure : musique et discussion reelles sur une heure.
+
+Note : `tests/test_wake.py::test_detects_wake_fixture` (lent) echoue depuis le modele entraine sur la vraie voix : la fixture de synthese (voix Piper) plafonne a 0,47, avec ou sans patience.
+
+## Reveils sur le souffle du micro, 2026-11-03
+
+Constat en usage : 3 reveils en 15 s (scores 0,71 ; 0,82 ; 1,00) sans que l'utilisateur parle. Les captures de diagnostic qui suivent sont du souffle (RMS 16-170, aucune trame de parole pour Silero). Rejouees dans `openwakeword.Model`, elles montent a 0,78 (3 trames >= 0,7) ; amplifiees x3, elles retombent a 0,64 au plus : le modele a appris le niveau de bruit du micro de l'utilisateur, present dans tous les positifs et absent de la plupart des negatifs (voix de synthese).
+
+Correctif : chaque reveil est confirme par Silero sur les 1,6 s precedentes (au moins 240 ms de parole, `speech_confirmer`), sinon il est ecarte et journalise. Sur les prises reelles 056-079 a 0,7 avec patience 2 : 21/24 reveils avec ou sans confirmation ; 0 faux reveil sur les 91 negatifs reels dans les deux cas. Le souffle seul, rejoue dans un detecteur neuf, ne declenche pas : en direct, le declenchement depend de l'audio precedent. Correctif de fond a faire : reentrainer avec quelques minutes de souffle et de bruit de la piece en negatifs.
+
+## Noms d'artistes, faisceau et modeles, 2026-11-03
+
+Source : capture reelle « lance MC Pao fausse richesse sur Spotify » (micro Realtek, niveau faible), `temperature=0`, processeur, int8.
+
+| Modele | Faisceau | Duree | Transcription |
+|---|---|---|---|
+| small | 1 | 1,7 s | Lance MCPOW FOSS RICESSE sur Spotify |
+| small | 5 | 1,7 s | Lance MCPOW, fausse richesse sur Spotify. |
+| medium | 5 | 4,9 s | Lance MC Pao fausse richesse sur Spotify |
+| large-v3-turbo | 5 | 7,0 s | Lance MCPAO fausses richesses sur Spotify. |
+
+Choix : `beam_size = 5` avec `small` (meme duree sur cet ordre). La recherche Spotify trouve « Fausse Richesse » a partir des transcriptions beam 5, pas a partir de beam 1. Piste suivante : `large-v3-turbo` sur la carte graphique (RTX 4060, 8 Go), a mesurer en jeu.

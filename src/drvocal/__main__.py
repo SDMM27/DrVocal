@@ -14,6 +14,7 @@ from drvocal.config import ConfigError, Settings, load_settings
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 log = logging.getLogger("drvocal")
+QUIET_LOGGERS = ("spotipy", "urllib3", "httpcore", "httpcore2", "httpx", "httpx2", "discord", "asyncio")
 
 
 def setup_logging() -> Path:
@@ -25,6 +26,8 @@ def setup_logging() -> Path:
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s : %(message)s"))
     level = getattr(logging, os.environ.get("DRVOCAL_LOG_LEVEL", "INFO").upper(), logging.INFO)
     logging.basicConfig(level=level, handlers=[handler], force=True)
+    for noisy in QUIET_LOGGERS:  # en DEBUG, spotipy ecrit le jeton d'acces (en-tete Authorization)
+        logging.getLogger(noisy).setLevel(max(level, logging.INFO))
     return path
 
 
@@ -75,7 +78,10 @@ async def amain(settings: Settings, screen) -> None:
         return vad
 
     transcriber = Transcriber(settings.stt_model, settings.stt_device)
-    ears = Ears(MicStream().frames(), transcriber.transcribe, fresh_vad)
+    captures = None
+    if log.isEnabledFor(logging.DEBUG):  # diagnostic : ce que le micro a capte apres chaque reveil
+        captures = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "DrVocal" / "captures"
+    ears = Ears(MicStream().frames(), transcriber.transcribe, fresh_vad, captures)
 
     mode = settings.wake_mode
     models = sorted(_rooted(settings.wake_models_dir).glob("*.onnx")) if mode == "voice" else []
@@ -83,9 +89,11 @@ async def amain(settings: Settings, screen) -> None:
         log.error("aucun modele de reveil dans %s, repli sur la touche", _rooted(settings.wake_models_dir))
         mode = "key"
     if mode == "voice":
+        from drvocal.audio.vad import speech_confirmer
         from drvocal.audio.wake import WakeDetector
 
-        detector = WakeDetector(models, settings.wake_threshold)
+        # Detecteur de parole a part (celui d'Ears sert pendant l'ecoute) ; ne tourne qu'au reveil.
+        detector = WakeDetector(models, settings.wake_threshold, confirm=speech_confirmer())
 
         def capture_command():
             return ears.listen(timings.command_silence_ms, timings.command_no_speech_ms, timings.command_max_ms)

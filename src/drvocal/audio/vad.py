@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
@@ -69,14 +70,32 @@ class SileroVAD:
         return peak >= self._threshold
 
 
+def speech_confirmer(vad: Callable[[np.ndarray], bool] | None = None,
+                     min_speech_ms: int = 240) -> Callable[[list[np.ndarray]], bool]:
+    """Pour WakeDetector : vrai si les trames contiennent au moins `min_speech_ms` de parole."""
+    detector = vad if vad is not None else SileroVAD()
+    needed = max(min_speech_ms // FRAME_MS, 1)
+
+    def confirm(frames: list[np.ndarray]) -> bool:
+        if hasattr(detector, "reset"):
+            detector.reset()
+        return sum(bool(detector(f)) for f in frames) >= needed
+
+    return confirm
+
+
 async def capture_utterance(
     frames: AsyncIterator[np.ndarray],
     silence_ms: int,
     no_speech_timeout_ms: int,
     max_ms: int = 120000,
     is_speech: Callable[[np.ndarray], bool] | None = None,
+    preroll_ms: int = 320,
 ) -> np.ndarray | None:
     """Accumule les trames jusqu'a `silence_ms` de silence apres la parole.
+
+    Les `preroll_ms` precedant la premiere trame de parole sont gardes : Silero
+    reagit avec un temps de retard et couperait la premiere syllabe ("mets").
 
     Renvoie None si aucune parole n'arrive avant `no_speech_timeout_ms` (ou si
     le flux se termine). Plafonne a `max_ms` et renvoie alors ce qui est capture.
@@ -87,6 +106,7 @@ async def capture_utterance(
         is_speech = detector
 
     captured: list[np.ndarray] = []
+    before: deque[np.ndarray] = deque(maxlen=max(preroll_ms // FRAME_MS, 0))
     waited_ms = 0
     silent_ms = 0
     total_ms = 0
@@ -99,8 +119,10 @@ async def capture_utterance(
                 waited_ms += FRAME_MS
                 if waited_ms >= no_speech_timeout_ms:
                     return None
+                before.append(frame)
                 continue
             started = True
+            captured.extend(before)
         captured.append(frame)
         total_ms += FRAME_MS
         silent_ms = 0 if speech else silent_ms + FRAME_MS
