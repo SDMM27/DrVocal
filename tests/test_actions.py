@@ -44,6 +44,6 @@ def test_catalogue_contains_no_destructive_action():
 def test_action_names_are_the_expected_closed_set():
     assert ACTION_NAMES == frozenset({
         "spotify.play", "spotify.pause", "spotify.resume", "spotify.next", "spotify.previous",
-        "spotify.volume", "discord.mute_self", "discord.deafen_self", "discord.message",
+        "spotify.volume", "spotify.dj", "discord.mute_self", "discord.deafen_self", "discord.message",
         "discord.move_self", "discord.mute_member", "notes.start", "claude.prompt",
         "claude.continue"})

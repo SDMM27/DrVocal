@@ -143,9 +143,15 @@ Spotify demande un compte **Premium** pour le contrôle de lecture.
 1. Sur le [tableau de bord développeur Spotify](https://developer.spotify.com/dashboard), créer une application.
 2. Ajouter exactement cette URI de redirection : `http://127.0.0.1:8888/callback`.
 3. Copier le Client ID dans `secrets.toml` (`spotify_client_id`). Aucun secret client n'est nécessaire (authentification PKCE).
-4. Au premier ordre Spotify, le navigateur s'ouvre pour autoriser l'application (permissions `user-read-playback-state` et `user-modify-playback-state`). Le jeton est gardé dans `.spotify-cache` à la racine, ignoré par git.
+4. Autoriser l'application une fois, avant d'utiliser la voix : `uv run python tools/spotify_login.py`. Le navigateur s'ouvre (permissions `user-read-playback-state`, `user-modify-playback-state`, `user-follow-read`, `user-top-read`, `playlist-read-private`, `user-library-read` et `user-read-recently-played`) ; le script affiche ensuite le nombre d'artistes, de playlists et de titres de ta bibliothèque. Le jeton est gardé dans `.spotify-cache` à la racine, ignoré par git. Sans cette étape, le navigateur s'ouvre au premier ordre Spotify.
 
-Si aucun appareil Spotify n'est actif, Dr Vocal retombe sur l'application de ce PC.
+**Bibliothèque prioritaire** : avant toute recherche, « mets… » compare ce que tu dis à tes artistes suivis, tes playlists, tes titres likés, tes écoutes récentes et tes plus écoutés (artistes et titres), jusqu'à 1000 titres likés. Un artiste écouté sans être suivi y entre aussi, et un titre se dit avec ou sans son artiste (« Mc Pao fausse richesse »). Elle se charge en arrière-plan au démarrage et se recharge toutes les heures ; les titres exigent une correspondance plus proche que les artistes. Un nom approximatif suffit (la transcription déforme souvent les noms : « d'Ariano » joue Daryana). Sans correspondance, la recherche Spotify classique prend le relais.
+
+**Après une mise à jour** qui ajoute des permissions, relancer `uv run python tools/spotify_login.py` pour réautoriser ; sinon, spotipy refuse l'ancien jeton et le navigateur s'ouvre au premier ordre Spotify.
+
+Dr Vocal vérifie que la lecture démarre vraiment et retente une fois sur l'application du PC sinon.
+
+Si aucun appareil Spotify n'est actif, Dr Vocal retombe sur l'application de ce PC. Si elle est fermée, « mets… » et « reprends la musique » l'ouvrent et attendent jusqu'à 20 s qu'elle soit prête ; les autres ordres (pause, suivant, volume) ne l'ouvrent pas.
 
 ### Raccourcis Discord simulés (désactivés par défaut)
 
