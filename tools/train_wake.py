@@ -11,7 +11,11 @@ conversion onnx_tf. Ici :
   francaises (models/piper), avec variations de debit et de prosodie, puis
   augmentes (gain, vitesse, bruit, murmure de fond, reverberation) ;
 - `--recordings DIR` ajoute de vrais enregistrements (WAV) de la phrase,
-  fortement augmentes ;
+  surponderes (`--real-repeat`) et fortement augmentes. `--max-index N` ne
+  garde que les prises NNN.wav <= N (le reste sert a l'evaluation, jamais a
+  l'entrainement) ; les prises quasi muettes sont ecartees. `--negative-recordings
+  DIR` ajoute les negatifs reels (DIR/<slug>/NNN.wav) comme negatifs difficiles,
+  sauf les slugs de `--exclude-negatives` (reserves a l'evaluation) ;
 - les caracteristiques sont celles du moteur (melspectrogramme + embeddings
   openWakeWord), calculees en flux, trame par trame, comme a l'execution ;
 - seul le classifieur final (petit reseau dense sur 16 embeddings) est entraine,
@@ -116,6 +120,78 @@ def trim(audio: np.ndarray, margin_ms: int = 40) -> np.ndarray:
     idx = np.nonzero(a > 0.02 * a.max())[0]
     m = RATE * margin_ms // 1000
     return audio[max(0, idx[0] - m) : idx[-1] + m]
+
+
+def take_index(path: Path) -> int | None:
+    return int(path.stem) if path.stem.isdigit() else None
+
+
+def list_takes(folder: Path, max_index: int | None = None, min_index: int | None = None) -> list[Path]:
+    """Prises NNN.wav d'un dossier, filtrees par numero (jamais deplacees)."""
+    out = []
+    for p in sorted(folder.glob("*.wav")):
+        i = take_index(p)
+        if i is None or (max_index is not None and i > max_index) or (min_index is not None and i < min_index):
+            continue
+        out.append(p)
+    return out
+
+
+def take_stats(audio: np.ndarray) -> dict:
+    """Controles de base d'une prise : pic, duree de parole, bords, ecretage."""
+    x = audio.astype(np.float64)
+    peak = int(np.abs(x).max()) if x.size else 0
+    n = RATE // 50  # trames de 20 ms
+    frames = x[: len(x) // n * n].reshape(-1, n) if len(x) >= n else np.zeros((1, n))
+    rms = np.sqrt((frames**2).mean(axis=1))
+    ref = float(np.percentile(rms, 95))
+    active = rms > max(0.1 * ref, 100.0)
+    return {
+        "peak": peak,
+        "duration_s": len(audio) / RATE,
+        "speech_s": float(active.sum() * n / RATE),
+        "starts_cut": bool(active[0]),
+        "ends_cut": bool(active[-1]),
+        "clipped": float((np.abs(x) >= 32000).mean()) if x.size else 0.0,
+    }
+
+
+def take_problems(stats: dict) -> list[str]:
+    """Raisons de suspecter une prise. Les deux premieres (muette) la font ecarter."""
+    out = []
+    if stats["peak"] < 800:
+        out.append("quasi muette (pic < 800)")
+    if stats["speech_s"] < 0.2:
+        out.append("quasi aucune parole (< 0,2 s)")
+    if 800 <= stats["peak"] < 1200:
+        out.append("faible (pic < 1200)")
+    if stats["clipped"] > 0.001:
+        out.append("ecretee")
+    if stats["starts_cut"]:
+        out.append("parole des la premiere trame")
+    if stats["ends_cut"]:
+        out.append("parole jusqu'a la derniere trame")
+    if stats["speech_s"] > 2.2:
+        out.append("parole > 2,2 s")
+    elif 0.2 <= stats["speech_s"] < 0.4:
+        out.append("parole courte (< 0,4 s)")
+    return out
+
+
+def is_unusable(stats: dict) -> bool:
+    return stats["peak"] < 800 or stats["speech_s"] < 0.2
+
+
+def usable_takes(folder: Path, max_index: int | None = None) -> tuple[list[Path], list[tuple[Path, str]]]:
+    """(prises gardees, prises ecartees avec raison)."""
+    keep, dropped = [], []
+    for p in list_takes(folder, max_index):
+        st = take_stats(read_wav(p))
+        if is_unusable(st):
+            dropped.append((p, "; ".join(take_problems(st))))
+        else:
+            keep.append(p)
+    return keep, dropped
 
 
 def read_wav(path: Path) -> np.ndarray:
@@ -244,7 +320,17 @@ def frame_labels(n_frames: int, phrase_end: int | None) -> tuple[np.ndarray, np.
 # --- jeu de donnees ---------------------------------------------------------
 
 
-def build_dataset(phrase: str, recordings: Path | None, work: Path, seed: int):
+def build_dataset(
+    phrase: str,
+    recordings: Path | None,
+    work: Path,
+    seed: int,
+    *,
+    max_index: int | None = None,
+    real_repeat: int = 10,
+    neg_recordings: Path | None = None,
+    exclude_negatives: tuple[str, ...] = (),
+):
     rng = np.random.default_rng(seed)
     pyrng = random.Random(seed)
     synth = Synth(work / "cache")
@@ -273,13 +359,28 @@ def build_dataset(phrase: str, recordings: Path | None, work: Path, seed: int):
         for text in texts:
             for ls in (0.9, 1.05, 1.2):
                 pos_audio.append(trim(synth(voice, spk, text, ls, seed + 13 * k)))
-    n_real = 0
+    real_pos: list[np.ndarray] = []
     if recordings is not None:
-        for path in sorted(recordings.glob("*.wav")):
-            rec = trim(read_wav(path))
-            pos_audio += [rec] * 10  # enregistrements reels : surponderes
-            n_real += 1
-    print(f"positifs : {len(pos_audio)} bases ({n_real} enregistrements reels)", flush=True)
+        keep, dropped = usable_takes(recordings, max_index)
+        for p, why in dropped:
+            print(f"prise ecartee : {p.name} ({why})", flush=True)
+        for path in keep:
+            real_pos += [trim(read_wav(path))] * real_repeat  # enregistrements reels : surponderes
+        n_real = len(keep)
+    else:
+        n_real = 0
+    real_neg: list[np.ndarray] = []
+    if neg_recordings is not None:
+        for folder in sorted(d for d in neg_recordings.iterdir() if d.is_dir()):
+            if folder.name in exclude_negatives:
+                continue
+            for path in list_takes(folder):
+                real_neg += [trim(read_wav(path))] * real_repeat
+    print(
+        f"positifs : {len(pos_audio)} synthetiques + {n_real} enregistrements reels x{real_repeat}; "
+        f"negatifs reels : {len(real_neg) // max(1, real_repeat)} prises",
+        flush=True,
+    )
 
     def scene_of(speech: np.ndarray, is_pos: bool, strength: float = 1.0):
         lead = np.zeros(int(rng.uniform(0.3, 1.0) * RATE))
@@ -301,12 +402,18 @@ def build_dataset(phrase: str, recordings: Path | None, work: Path, seed: int):
         "neg": lambda: (scene_of(b, False) for b in neg_audio for _ in range(2)),
         "adv": lambda: (scene_of(b, False) for b in adversarial for _ in range(2)),
         "noise": noise_scenes,
+        # etapes dependant des enregistrements reels : jamais mises en cache
+        "real": lambda: (scene_of(b, True) for b in real_pos for _ in range(5)),
+        "realneg": lambda: (scene_of(b, False) for b in real_neg for _ in range(5)),
     }
+    uncached = {"real", "realneg"}
     X, Y, W = [], [], []
     for name, scenes in stages.items():
         # chaque etape est mise en cache : une execution interrompue reprend ici
         part = work / f"stage_{slug(phrase)}_{seed}_{name}.npz"
-        if part.exists() and recordings is None:
+        if name in uncached and not (real_pos if name == "real" else real_neg):
+            continue
+        if name not in uncached and part.exists():
             d = np.load(part)
             sx, sy, sw = d["X"], d["Y"], d["W"]
         else:
@@ -316,7 +423,7 @@ def build_dataset(phrase: str, recordings: Path | None, work: Path, seed: int):
                 y, w = frame_labels(len(feats), phrase_end)
                 fx.append(feats), fy.append(y), fw.append(w)
             sx, sy, sw = np.concatenate(fx), np.concatenate(fy), np.concatenate(fw)
-            if recordings is None:
+            if name not in uncached:
                 np.savez(part, X=sx, Y=sy, W=sw)
         print(f"etape {name} : {len(sy)} fenetres", flush=True)
         X.append(sx), Y.append(sy), W.append(sw)
@@ -462,22 +569,38 @@ def evaluate(phrase: str, model_path: Path, work: Path, threshold: float, seed: 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("phrase")
-    ap.add_argument("--recordings", type=Path, help="dossier de WAV reels de la phrase")
+    ap.add_argument("--recordings", type=Path, help="dossier de WAV reels de la phrase (NNN.wav)")
+    ap.add_argument("--max-index", type=int, help="ne garde que les prises NNN <= N (le reste est reserve a l'evaluation)")
+    ap.add_argument("--real-repeat", type=int, default=10, help="surponderation des prises reelles")
+    ap.add_argument("--negative-recordings", type=Path, help="dossier de negatifs reels (<slug>/NNN.wav)")
+    ap.add_argument("--exclude-negatives", nargs="*", default=[], help="slugs de negatifs reserves a l'evaluation")
     ap.add_argument("--out", type=Path, default=ROOT / "models" / "wake")
     ap.add_argument("--work", type=Path, default=ROOT / "models" / "wake_train")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--eval-only", action="store_true", help="n'entraine pas, evalue le modele existant")
     ap.add_argument("--threshold", type=float, default=0.5)
+    ap.add_argument("--no-eval", action="store_true", help="n'evalue pas (voir tools/eval_voice.py)")
     args = ap.parse_args()
 
     phrase = args.phrase.strip().lower()
     model_path = args.out / f"{slug(phrase)}.onnx"
     if not args.eval_only:
-        X, Y, W = build_dataset(phrase, args.recordings, args.work, args.seed)
+        X, Y, W = build_dataset(
+            phrase,
+            args.recordings,
+            args.work,
+            args.seed,
+            max_index=args.max_index,
+            real_repeat=args.real_repeat,
+            neg_recordings=args.negative_recordings,
+            exclude_negatives=tuple(args.exclude_negatives),
+        )
         net = fit(X, Y, W, args.epochs, args.seed)
         export(net, model_path)
         print(f"modele : {model_path}")
+    if args.no_eval:
+        return
     report = {
         str(t): evaluate(phrase, model_path, args.work, t, args.seed)
         for t in sorted({args.threshold, 0.7, 0.9})
