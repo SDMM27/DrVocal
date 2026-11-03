@@ -779,6 +779,7 @@ dependencies = [
     { name = "faster-whisper" },
     { name = "numpy" },
     { name = "openwakeword" },
+    { name = "piper-tts" },
     { name = "pywebview" },
     { name = "sounddevice" },
     { name = "spotipy" },
@@ -786,7 +787,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "piper-tts" },
     { name = "psutil" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -803,6 +803,7 @@ requires-dist = [
     { name = "faster-whisper", specifier = ">=1.2.1" },
     { name = "numpy", specifier = ">=2.5.4" },
     { name = "openwakeword", specifier = ">=0.4.0" },
+    { name = "piper-tts", specifier = ">=1.8.0" },
     { name = "pywebview", specifier = ">=6.2.1" },
     { name = "sounddevice", specifier = ">=0.5.6" },
     { name = "spotipy", specifier = ">=2.26.0" },
@@ -810,7 +811,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "piper-tts", specifier = ">=1.8.0" },
     { name = "psutil", specifier = ">=7.2.2" },
     { name = "pytest" },
     { name = "pytest-asyncio", specifier = ">=1.4.1.post1" },

@@ -93,3 +93,11 @@ Rien n'est declare sur. Option la plus prudente : garder
 anti-cheat (CS2, Rocket League en ligne, RDO). Tout test reel (etape 6 du plan) reste a la
 decision de l'utilisateur apres lecture de ce document ; lire les pages ci-dessus dans un
 navigateur est recommande.
+
+## Mode touche a maintenir
+
+Le mode de reveil `key` lit passivement l'etat d'une touche ou d'un bouton de souris
+(`GetAsyncKeyState`, lecture seule). Rien n'est envoye au jeu, aucun hook clavier ni souris
+n'est installe, aucune entree n'est simulee : le jeu recoit la touche normalement. Choisir
+une touche non utilisee en jeu pour eviter un effet de bord.
+

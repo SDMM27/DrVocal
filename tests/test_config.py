@@ -87,3 +87,31 @@ def test_discord_owner_id(tmp_path):
     assert load_settings(empty_config(tmp_path)).discord_owner_id == 0
     s = load_settings(write_config(tmp_path, "[discord]\nowner_id = 42\n"))
     assert s.discord_owner_id == 42
+
+
+def test_wake_and_audio_defaults(tmp_path):
+    s = load_settings(empty_config(tmp_path))
+    assert s.wake_mode == "key" and s.push_to_talk_key == "mouse5"
+    assert s.wake_models_dir == Path("models/wake") and s.wake_threshold == 0.9
+    assert s.tts_voice == Path("models/piper/fr_FR-siwis-medium.onnx")
+    assert s.sounds == {}
+
+
+def test_wake_settings_are_loaded(tmp_path):
+    s = load_settings(write_config(
+        tmp_path,
+        'wake_mode = "Voice"\npush_to_talk_key = "F9"\nwake_threshold = 0.8\n'
+        '[sounds]\nwake = "w.wav"\n'))
+    assert (s.wake_mode, s.push_to_talk_key, s.wake_threshold) == ("voice", "f9", 0.8)
+    assert s.sounds == {"wake": Path("w.wav")}
+
+
+def test_invalid_wake_mode_raises(tmp_path):
+    with pytest.raises(ConfigError):
+        load_settings(write_config(tmp_path, 'wake_mode = "clap"'))
+
+
+def test_unknown_push_to_talk_key_raises(tmp_path):
+    with pytest.raises(ConfigError):
+        load_settings(write_config(tmp_path, 'push_to_talk_key = "mouse99"'))
+

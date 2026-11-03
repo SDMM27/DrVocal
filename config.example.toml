@@ -7,6 +7,24 @@ simulated_hotkeys_enabled = false
 # Phrases d'activation (minuscules).
 wake_phrases = ["salut doc vocal"]
 
+# Mode de reveil : "key" (touche ou bouton a maintenir pour parler, defaut tant que le modele
+# vocal n'est pas valide) ou "voice" (mot de reveil). Autre valeur : erreur.
+wake_mode = "key"
+
+# Touche ou bouton a maintenir en mode "key" : mouse3, mouse4, mouse5, une lettre, F1-F24, space...
+# Choisir une touche ou un bouton NON utilise dans les jeux. Le jeu recoit toujours la touche :
+# Dr Vocal se contente de lire son etat (voir docs/anti-triche.md), il ne l'intercepte pas.
+push_to_talk_key = "mouse5"
+
+# Modeles de mot de reveil (*.onnx), relatif a la racine du projet. Sans modele, repli sur la touche.
+wake_models_dir = "models/wake"
+
+# Seuil de detection du mot de reveil (mesure du 2026-11-03, voir docs/mesures.md).
+wake_threshold = 0.9
+
+# Voix Piper pour les lectures (messages Discord, questions de Claude), relatif a la racine du projet.
+tts_voice = "models/piper/fr_FR-siwis-medium.onnx"
+
 # Dossier des notes (defaut : Documents/NOTES).
 # notes_dir = "C:/Users/moi/Documents/NOTES"
 
@@ -47,3 +65,7 @@ general = 123456789012345678
 # Membres : nom parle -> identifiant Discord.
 [discord.members]
 alex = 123456789012345678
+
+# Sons personnalises (WAV), facultatif : wake, success, failure, done. Sinon bips integres.
+# [sounds]
+# wake = "C:/Users/moi/sons/wake.wav"

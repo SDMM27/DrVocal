@@ -26,6 +26,12 @@ class Settings:
     synonyms: dict[str, str] = field(default_factory=dict)
     simulated_hotkeys_enabled: bool = False
     discord_owner_id: int = 0
+    wake_mode: str = "key"  # "voice" ou "key" : touche tant que le modele vocal n'est pas valide
+    push_to_talk_key: str = "mouse5"
+    wake_models_dir: Path = Path("models/wake")  # relatif a la racine du projet (resolu par l'app)
+    wake_threshold: float = 0.9
+    tts_voice: Path = Path("models/piper/fr_FR-siwis-medium.onnx")  # idem, relatif a la racine
+    sounds: dict[str, Path] = field(default_factory=dict)
 
 
 def _as_bool(value: object) -> bool:
@@ -50,8 +56,16 @@ def load_settings(config_path: Path, secrets_path: Path | None = None) -> Settin
     if secrets_path is not None and secrets_path.exists():
         secrets = _read_toml(secrets_path)
 
+    from drvocal.audio.push_to_talk import resolve_key  # import tardif : evite un cycle avec actions_hotkeys
+
     discord = data.get("discord", {})
     try:
+        wake_mode = str(data.get("wake_mode", "key")).strip().lower()
+        if wake_mode not in ("voice", "key"):
+            raise ValueError(f"wake_mode doit valoir 'voice' ou 'key', recu {wake_mode!r}")
+        key = str(data.get("push_to_talk_key", "mouse5")).strip().lower()
+        if resolve_key(key) is None:
+            raise ValueError(f"push_to_talk_key inconnue : {key!r}")
         return Settings(
             wake_phrases=[str(p).strip().lower() for p in data.get("wake_phrases", DEFAULT_WAKE_PHRASES)],
             notes_dir=Path(data.get("notes_dir", Path.home() / "Documents" / "NOTES")),
@@ -68,6 +82,12 @@ def load_settings(config_path: Path, secrets_path: Path | None = None) -> Settin
                       for k, v in data.get("synonyms", {}).items()},
             simulated_hotkeys_enabled=_as_bool(data.get("simulated_hotkeys_enabled", False)),
             discord_owner_id=int(discord.get("owner_id", 0)),
+            wake_mode=wake_mode,
+            push_to_talk_key=key,
+            wake_models_dir=Path(data.get("wake_models_dir", "models/wake")),
+            wake_threshold=float(data.get("wake_threshold", 0.9)),
+            tts_voice=Path(data.get("tts_voice", "models/piper/fr_FR-siwis-medium.onnx")),
+            sounds={str(k): Path(v) for k, v in data.get("sounds", {}).items()},
         )
     except (TypeError, ValueError, AttributeError) as e:
         raise ConfigError(f"Valeur invalide dans {config_path} : {e}") from e

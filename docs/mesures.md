@@ -50,3 +50,15 @@ Croisement a 0,9 (modele, phrase prononcee) : le modele `salut_docteur` se decle
 Diagnostics : sur les prises d'entrainement (en echantillon) la detection est de 88/95 a 0,9, contre 13/32 sur la validation : le modele memorise les prises, il ne generalise pas avec 23-24 prises par phrase. Sur la validation, les faux reveils sur les negatifs synthetiques sont aussi nombreux (29 sur 102 a 0,9).
 
 Verdict : insuffisant. Moins de la moitie des phrases dites sont reconnues et le mot « docteur » seul reveille. Limites de cette mesure : 8 prises par phrase et 12 negatifs (4 phrases) ne permettent pas de valider la cible « < 1 faux reveil par heure » ; l'intervalle de confiance sur 15/32 est tres large, et 12 negatifs d'une seconde ne couvrent aucune heure de discussion. Seule une vraie session (une heure de jeu avec discussion Discord) peut verifier cette cible. Sur ces chiffres, on ne peut pas conclure que ce modele atteindra la cible, ni que openWakeWord est exclu : le goulot est le jeu de donnees reel et le classifieur surajuste.
+
+## Modele synthetique "salut doc vocal", 2026-11-03
+
+Source : `tools/train_wake.py "salut doc vocal"`, voix Piper seules (aucun enregistrement reel), 40 epoques sur processeur. Evaluation integree au script : voix jamais entrainees (fr_FR-tom-medium et locuteurs MLS d'evaluation), 598 s de negatifs synthetiques.
+
+| Seuil | Positifs propres | Positifs bruites | Faux reveils (598 s) | Faux reveils par heure |
+|---|---|---|---|---|
+| 0,5 | 13/24 | 15/24 | 14 | 84 |
+| 0,7 | 10/24 | 12/24 | 10 | 60 |
+| 0,9 | 8/24 | 10/24 | 8 | 48 |
+
+Verdict : modele provisoire, insuffisant pour le mode `voice`. Il sert a verifier la chaine de bout en bout ; le mode `key` (touche a maintenir) reste le defaut. Prochaine mesure : avec les 80 prises reelles et les negatifs pieges de `tools/record_voice.py`.
