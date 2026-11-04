@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import unicodedata
 import wave
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
@@ -69,6 +70,8 @@ class Ears:
         self._queue: asyncio.Queue[np.ndarray | None] | None = None
         self._lock = asyncio.Lock()
         self._closed = False
+        self.last_audio: np.ndarray | None = None  # audio de la derniere ecoute (journal des commandes)
+        self.last_stt_ms: int | None = None
 
     async def pump(self, on_idle_frame: Callable[[np.ndarray], None]) -> None:
         try:
@@ -98,12 +101,15 @@ class Ears:
             yield frame
 
     async def _text(self, audio: np.ndarray) -> str | None:
+        start = time.perf_counter()
         text = await asyncio.to_thread(self._transcribe, audio)
+        self.last_stt_ms = round((time.perf_counter() - start) * 1000)
         log.debug("transcription : %s", text)
         return text.strip() or None
 
     async def listen(self, silence_ms: int, no_speech_timeout_ms: int, max_ms: int) -> str | None:
         async with self._lock:
+            self.last_audio, self.last_stt_ms = None, None
             queue = self._open()
             heard: list[np.ndarray] = []
 
@@ -122,6 +128,7 @@ class Ears:
                 peak = max((int(np.abs(f).max()) for f in heard), default=0)
                 log.info("aucune parole apres l'ecoute (%d ms, crete %d/32767)", len(heard) * FRAME_MS, peak)
                 return None
+            self.last_audio = audio
             return await self._text(audio)
 
     def _keep_capture(self, frames: list[np.ndarray]) -> None:
@@ -143,6 +150,7 @@ class Ears:
     async def record_while(self, held: Callable[[], bool], max_ms: int, min_ms: int = 300) -> str | None:
         """Enregistre tant que `held()` est vrai (verifie a chaque trame), plus 2 trames de traine."""
         async with self._lock:
+            self.last_audio, self.last_stt_ms = None, None
             queue = self._open()
             frames: list[np.ndarray] = []
             held_ms = 0
@@ -163,7 +171,8 @@ class Ears:
                 self._queue = None
             if held_ms < min_ms:
                 return None
-            return await self._text(np.concatenate(frames))
+            self.last_audio = np.concatenate(frames)
+            return await self._text(self.last_audio)
 
     async def wait_for_cancel(self, seconds: float) -> bool:
         text = await self.listen(silence_ms=700, no_speech_timeout_ms=int(seconds * 1000), max_ms=5000)
@@ -183,6 +192,7 @@ class Assistant:
         player: Any,
         speaker: Any,
         notify: Callable[[str], None] | None = None,
+        command_log: Callable[..., None] | None = None,
     ) -> None:
         self._ears = ears
         self._detector = detector
@@ -192,6 +202,7 @@ class Assistant:
         self._player = player
         self._speaker = speaker  # jamais utilise pour repondre : pas de voix par defaut
         self._notify = notify
+        self._command_log = command_log
         self._waking = False
         self._tasks: set[asyncio.Task] = set()
 
@@ -221,23 +232,39 @@ class Assistant:
             text = await self._capture()
             if text is None:
                 return  # faux reveil : retour en veille, sans son
+            # copie tout de suite : une action Discord reecoute plus tard et ecraserait ces attributs
+            audio, stt_ms = self._ears.last_audio, self._ears.last_stt_ms
             intent = self._parse(text)
             if intent is None:
                 log.info("commande non comprise")
+                await self._journal(text, None, None, audio, stt_ms, None)
                 self._player.play("failure")
                 return
-            self._spawn(self._run_action(intent))
+            self._spawn(self._run_action(intent, text, audio, stt_ms))
         except Exception:
             log.exception("echec pendant le traitement d'un reveil")
         finally:
             self._waking = False
 
-    async def _run_action(self, intent: Intent) -> None:
+    async def _journal(self, text: str, intent: Intent | None, ok: bool | None, audio: np.ndarray | None,
+                       stt_ms: int | None, action_ms: int | None) -> None:
+        if self._command_log is None:
+            return
+        try:
+            await asyncio.to_thread(self._command_log, text, intent, ok, audio, stt_ms, action_ms)
+        except Exception:
+            log.exception("journal des commandes en erreur")
+
+    async def _run_action(self, intent: Intent, text: str = "", audio: np.ndarray | None = None,
+                          stt_ms: int | None = None) -> None:
+        start = time.perf_counter()
         try:
             outcome = await self._catalogue.run(intent)
         except Exception:
             log.exception("action %s en erreur", intent.action)
             outcome = Outcome(False)
+        action_ms = round((time.perf_counter() - start) * 1000)
+        await self._journal(text, intent, outcome.ok, audio, stt_ms, action_ms)
         self._player.play("success" if outcome.ok else "failure")
         if outcome.speak:
             log.info("%s : %s", intent.action, outcome.speak)

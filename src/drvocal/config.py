@@ -32,12 +32,21 @@ class Settings:
     wake_threshold: float = 0.9
     tts_voice: Path = Path("models/piper/fr_FR-siwis-medium.onnx")  # idem, relatif a la racine
     sounds: dict[str, Path] = field(default_factory=dict)
+    command_log: bool = True
+    stt_hotwords: bool = True
+    stt_vocabulary: list[str] = field(default_factory=list)
 
 
 def _as_bool(value: object) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"booleen attendu, recu {value!r}")
     return value
+
+
+def _as_str_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"liste attendue, recu {value!r}")
+    return [str(v).strip() for v in value if str(v).strip()]
 
 
 def _read_toml(path: Path) -> dict:
@@ -88,6 +97,9 @@ def load_settings(config_path: Path, secrets_path: Path | None = None) -> Settin
             wake_threshold=float(data.get("wake_threshold", 0.9)),
             tts_voice=Path(data.get("tts_voice", "models/piper/fr_FR-siwis-medium.onnx")),
             sounds={str(k): Path(v) for k, v in data.get("sounds", {}).items()},
+            command_log=_as_bool(data.get("command_log", True)),
+            stt_hotwords=_as_bool(data.get("stt_hotwords", True)),
+            stt_vocabulary=_as_str_list(data.get("stt_vocabulary", [])),
         )
     except (TypeError, ValueError, AttributeError) as e:
         raise ConfigError(f"Valeur invalide dans {config_path} : {e}") from e

@@ -81,3 +81,43 @@ def test_transcribes_french_fixture():
     text = t.transcribe(load_wav("mets_daft_punk.wav"))
     t.unload()
     assert "daft punk" in normalise(text)
+
+
+def _model_recording(seen):
+    class Segment:
+        text = "ok"
+
+    class Model:
+        def transcribe(self, samples, **kwargs):
+            seen.update(kwargs)
+            return [Segment()], None
+
+    return Model()
+
+
+def test_hotwords_are_passed_to_the_model():
+    seen = {}
+    t = Transcriber("small", "cpu", hotwords=lambda: "Daft Punk, alex")
+    t._model = _model_recording(seen)
+    t.transcribe(np.zeros(1600, dtype=np.int16))
+    assert seen["hotwords"] == "Daft Punk, alex"
+
+
+def test_empty_hotwords_are_not_passed():
+    seen = {}
+    t = Transcriber("small", "cpu", hotwords=lambda: "")
+    t._model = _model_recording(seen)
+    t.transcribe(np.zeros(1600, dtype=np.int16))
+    assert "hotwords" not in seen
+
+
+def test_failing_hotwords_provider_still_transcribes():
+    seen = {}
+
+    def boom():
+        raise RuntimeError("fournisseur")
+
+    t = Transcriber("small", "cpu", hotwords=boom)
+    t._model = _model_recording(seen)
+    assert t.transcribe(np.zeros(1600, dtype=np.int16)) == "ok"
+    assert "hotwords" not in seen

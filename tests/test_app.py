@@ -414,3 +414,77 @@ def test_debug_captures_are_capped(tmp_path):
         (tmp_path / f"2000-01-01_00-00-{i:02d}-000000.wav").write_bytes(b"")
     ears._keep_capture([frame(SPEECH)])
     assert len(list(tmp_path.glob("*.wav"))) == 20
+
+
+class Journal:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.calls: list[tuple] = []
+        self.error = error
+
+    def __call__(self, text, intent, ok, audio, stt_ms, action_ms) -> None:
+        self.calls.append((text, intent, ok, audio, stt_ms, action_ms))
+        if self.error is not None:
+            raise self.error
+
+
+def build_logged(script, journal, texts=None, catalogue=None):
+    ears, transcribed = make_ears(script, texts)
+    catalogue = catalogue or FakeCatalogue()
+    assistant = Assistant(ears, Detector(), voice_capture(ears), parse, catalogue, Player(), Speaker(),
+                          command_log=journal)
+    return assistant, catalogue, transcribed
+
+
+async def test_unparsed_command_is_logged_without_intent():
+    journal = Journal()
+    assistant, _, _ = build_logged([WAKE, SPEECH, *SILENCE_END, *GAP], journal, texts=["blabla"])
+    await run_assistant(assistant)
+    [(text, intent, ok, audio, stt_ms, action_ms)] = journal.calls
+    assert text == "blabla" and intent is None and ok is None and action_ms is None
+    assert audio is not None and len(audio) > 0 and stt_ms is not None
+
+
+async def test_executed_command_is_logged_with_action_and_outcome():
+    journal = Journal()
+    assistant, _, _ = build_logged([WAKE, SPEECH, *SILENCE_END, *GAP], journal)
+    await run_assistant(assistant)
+    [(text, intent, ok, _, _, action_ms)] = journal.calls
+    assert text == "pause" and intent == Intent("spotify.pause", {}) and ok is True
+    assert action_ms is not None and action_ms >= 0
+
+
+async def test_failed_and_raising_actions_are_logged_not_ok():
+    for outcome in (Outcome(False), RuntimeError("boum")):
+        journal = Journal()
+        assistant, _, _ = build_logged([WAKE, SPEECH, *SILENCE_END, *GAP], journal,
+                                       catalogue=FakeCatalogue(outcome))
+        await run_assistant(assistant)
+        assert journal.calls[0][2] is False
+
+
+async def test_logged_audio_is_the_command_even_if_action_listens_again():
+    journal = Journal()
+    script = [WAKE, SPEECH, SPEECH, *SILENCE_END, *[SILENT] * 30, *[SPEECH] * 6, *SILENCE_END, *GAP]
+    ears = Ears(feed(script, 0.02), lambda audio: transcribed.append(len(audio)) or next(answers), lambda: is_speech)
+    transcribed: list[int] = []
+    answers = iter(["pause", "autre"])
+
+    class Listening(FakeCatalogue):
+        async def run(self, intent):
+            self.ran.append(intent)
+            await ears.listen(700, 3000, 15000)
+            return Outcome(True)
+
+    assistant = Assistant(ears, Detector(), voice_capture(ears), parse, Listening(), Player(), Speaker(),
+                          command_log=journal)
+    await run_assistant(assistant)
+    assert len(transcribed) == 2 and transcribed[0] != transcribed[1]
+    assert len(journal.calls[0][3]) == transcribed[0]
+
+
+async def test_failing_journal_does_not_break_the_command():
+    journal = Journal(RuntimeError("disque plein"))
+    assistant, catalogue, _ = build_logged([WAKE, SPEECH, *SILENCE_END, *GAP], journal)
+    await run_assistant(assistant)
+    assert catalogue.ran == [Intent("spotify.pause", {})]
+    assert len(journal.calls) == 1

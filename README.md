@@ -240,6 +240,21 @@ Tout autre énoncé, y compris un simple « oui » adressé à un ami, n'est pas
 
 Sans réponse comprise dans les 60 s, ou si le résumé est trop long ou sur plusieurs lignes pour être dit fidèlement, l'action n'est pas exécutée et la demande reste en attente sur le deuxième écran, avec des boutons Autoriser et Refuser à utiliser après la partie. Autoriser une demande en attente relance la session pour que Claude réessaie une seule fois.
 
+## Journal des commandes et vocabulaire
+
+Chaque commande dite après le réveil est notée dans `%LOCALAPPDATA%\DrVocal\commands\commands.jsonl` : date, texte transcrit, action et arguments compris (ou `null` si la commande n'a pas été comprise), succès, durée de transcription et d'action. Le texte comprend donc les messages Discord et les prompts Claude dictés dans la commande. Les dictées de notes et les réponses à Claude ne sont pas journalisées. Le WAV de la commande n'est gardé que pour un échec (non comprise ou action échouée), dans `commandsailures` (200 plus récents). Le fichier tourne à 2 Mo (`commands.1.jsonl`). Tout reste local sur ton PC.
+
+Pour le désactiver : `command_log = false` dans `config.toml`.
+
+Pour rejouer les échecs avec les réglages actuels (nouvelle transcription, nouvelle analyse, comparaison avec l'ancien résultat) :
+
+```powershell
+uv run python tools/replay_commands.py --limit 50
+uv run python tools/replay_commands.py --no-hotwords   # sans vocabulaire, pour comparer
+```
+
+`stt_vocabulary` (liste de noms propres, par exemple `["Dr Vocal", "Daft Punk"]`) aide la transcription à reconnaître des noms mal compris. Ces termes passent avant ceux tirés automatiquement des projets, des salons et membres Discord et de Spotify (~400 caractères au total). `stt_hotwords = false` désactive tout le vocabulaire.
+
 ## Lancement au démarrage de Windows
 
 Enregistre `pythonw.exe -m drvocal` dans la clé `Run` de l'utilisateur (sans droits administrateur, sans console) :

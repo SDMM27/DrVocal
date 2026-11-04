@@ -552,3 +552,17 @@ async def test_weak_artist_needs_close_name(client):
     client.search.return_value = _search(artists=[_item("Mc Pao", "spotify:artist:pao")])
     await run(client, "spotify.play", query="MC Pao")
     client.start_playback.assert_called_once_with(context_uri="spotify:artist:pao")
+
+
+def test_library_vocabulary_never_loads_and_filters(client):
+    from drvocal.actions_spotify import Library
+
+    lib = Library(client)
+    assert lib.vocabulary() == []
+    client.current_user_followed_artists.assert_not_called()
+    lib._entries = [("Zaz", "spotify:artist:1"), ("Mix", "spotify:playlist:1"), ("Faible", "spotify:artist:2"),
+                    ("Titre", "spotify:track:1"), ("Autre", "spotify:artist:3")]
+    lib.strong = frozenset({"spotify:artist:1", "spotify:playlist:1", "spotify:track:1", "spotify:artist:3"})
+    assert lib.vocabulary() == ["Mix", "Zaz", "Autre"]
+    assert lib.vocabulary(limit=2) == ["Mix", "Zaz"]
+    client.current_user_followed_artists.assert_not_called()

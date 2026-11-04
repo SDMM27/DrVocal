@@ -77,7 +77,15 @@ async def amain(settings: Settings, screen) -> None:
         vad.reset()  # un seul ecouteur a la fois (verrou de Ears) : on reutilise le modele charge
         return vad
 
-    transcriber = Transcriber(settings.stt_model, settings.stt_device)
+    from drvocal.vocabulary import make_hotwords
+
+    spotify_library: list = []  # rempli par _register_optional, apres la creation du Transcriber
+
+    def spotify_names() -> list[str]:
+        return spotify_library[0].vocabulary() if spotify_library else []  # ne bloque jamais sur le reseau
+
+    hotwords = make_hotwords(settings, spotify_names) if settings.stt_hotwords else None
+    transcriber = Transcriber(settings.stt_model, settings.stt_device, hotwords=hotwords)
     captures = None
     if log.isEnabledFor(logging.DEBUG):  # diagnostic : ce que le micro a capte apres chaque reveil
         captures = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "DrVocal" / "captures"
@@ -116,7 +124,9 @@ async def amain(settings: Settings, screen) -> None:
         runner.resolve_pending(pending_id, reply), loop))
 
     background: set[asyncio.Task] = set()
-    _register_optional(catalogue, settings, ears, speaker, background)
+    library = _register_optional(catalogue, settings, ears, speaker, background)
+    if library is not None:
+        spotify_library.append(library)
 
     async def preload_stt() -> None:
         try:
@@ -128,8 +138,15 @@ async def amain(settings: Settings, screen) -> None:
     background.add(preload)
     preload.add_done_callback(background.discard)
 
+    command_log = None
+    if settings.command_log:
+        from drvocal.command_log import CommandLog
+
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+        command_log = CommandLog(base / "DrVocal" / "commands").record
     assistant = Assistant(ears, detector, capture_command, lambda text: parse(text, settings),
-                          catalogue, player, speaker, notify=lambda text: push(SessionEvent("text", text)))
+                          catalogue, player, speaker, notify=lambda text: push(SessionEvent("text", text)),
+                          command_log=command_log)
     try:
         await assistant.run()
     finally:
@@ -137,13 +154,17 @@ async def amain(settings: Settings, screen) -> None:
             task.cancel()
 
 
-def _register_optional(catalogue, settings: Settings, ears, speaker, background: set) -> None:
-    """Spotify, Discord, raccourcis : un echec au demarrage est journalise et ignore."""
+def _register_optional(catalogue, settings: Settings, ears, speaker, background: set):
+    """Spotify, Discord, raccourcis : un echec au demarrage est journalise et ignore.
+
+    Renvoie la bibliotheque Spotify (ou None) pour le vocabulaire de transcription.
+    """
+    library = None
     if settings.spotify_client_id:
         try:
             from drvocal.actions_spotify import build_client, register_spotify
 
-            register_spotify(catalogue, build_client(settings.spotify_client_id, ROOT / ".spotify-cache"))
+            library = register_spotify(catalogue, build_client(settings.spotify_client_id, ROOT / ".spotify-cache"))
         except Exception:
             log.exception("Spotify indisponible")
     if settings.discord_bot_token and settings.discord_owner_id:
@@ -173,6 +194,7 @@ def _register_optional(catalogue, settings: Settings, ears, speaker, background:
             register_hotkeys(catalogue, send_keys, settings)
         except Exception:
             log.exception("raccourcis clavier indisponibles")
+    return library
 
 
 def main() -> int:

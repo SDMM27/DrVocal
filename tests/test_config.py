@@ -115,3 +115,20 @@ def test_unknown_push_to_talk_key_raises(tmp_path):
     with pytest.raises(ConfigError):
         load_settings(write_config(tmp_path, 'push_to_talk_key = "mouse99"'))
 
+
+
+def test_command_log_and_vocabulary_defaults(tmp_path):
+    s = load_settings(empty_config(tmp_path))
+    assert s.command_log is True and s.stt_hotwords is True and s.stt_vocabulary == []
+
+
+def test_command_log_and_vocabulary_load(tmp_path):
+    s = load_settings(write_config(
+        tmp_path, 'command_log = false\nstt_hotwords = false\nstt_vocabulary = [" Daft Punk ", "", "Zaz"]'))
+    assert s.command_log is False and s.stt_hotwords is False and s.stt_vocabulary == ["Daft Punk", "Zaz"]
+
+
+@pytest.mark.parametrize("line", ['command_log = "oui"', 'stt_hotwords = 1', 'stt_vocabulary = "Zaz"'])
+def test_invalid_command_log_and_vocabulary_values_raise(tmp_path, line):
+    with pytest.raises(ConfigError):
+        load_settings(write_config(tmp_path, line))

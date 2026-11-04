@@ -32,6 +32,17 @@ tts_voice = "models/piper/fr_FR-siwis-medium.onnx"
 stt_model = "small"
 stt_device = "cpu"
 
+# Journal local des commandes (texte, action, resultat, WAV des echecs seulement) dans
+# %LOCALAPPDATA%/DrVocal/commands. Mettre false pour le desactiver.
+# command_log = true
+
+# Vocabulaire transmis a la transcription (noms de projets, salons, membres, Spotify).
+# stt_hotwords = true
+
+# Noms propres mal transcrits : prioritaires sur ceux tires des projets/salons/membres/Spotify
+# (~400 caracteres au total, le reste est ignore).
+# stt_vocabulary = ["Dr Vocal", "Daft Punk"]
+
 # Index du second ecran (0 = ecran principal).
 second_screen_index = 1
 

@@ -238,6 +238,13 @@ class Library:
     def preload(self) -> None:
         self.entries()
 
+    def vocabulary(self, limit: int = 40) -> list[str]:
+        """Noms d'artistes et de playlists forts, sans jamais charger ni attendre le reseau (playlists d'abord)."""
+        entries, strong = self._entries, self.strong
+        playlists = [n for n, uri in entries if uri in strong and uri.startswith("spotify:playlist:")]
+        artists = [n for n, uri in entries if uri in strong and uri.startswith("spotify:artist:")]
+        return (playlists + artists)[:limit]
+
     def _load(self) -> list[tuple[str, str]]:
         c = self._client
         sources = [
@@ -392,7 +399,7 @@ def _play_query(client: spotipy.Spotify, query: str, launch: Callable[[], None] 
 
 
 def register_spotify(catalogue: Catalogue, client: spotipy.Spotify,
-                     launch: Callable[[], None] | None = launch_spotify_app, preload: bool = True) -> None:
+                     launch: Callable[[], None] | None = launch_spotify_app, preload: bool = True) -> Library:
     """`launch` ouvre l'application quand aucun appareil n'est la (lancer une musique seulement).
 
     `preload` charge la bibliotheque en arriere-plan pour que la premiere commande n'attende pas.
@@ -444,3 +451,4 @@ def register_spotify(catalogue: Catalogue, client: spotipy.Spotify,
     action("spotify.next", simple(client.next_track))
     action("spotify.previous", simple(client.previous_track))
     action("spotify.volume", volume)
+    return library
