@@ -82,7 +82,10 @@ def render_event(event: SessionEvent) -> str:
 def _page_with_hash() -> str:
     """Page avec le hash du script inline dans la CSP (aucun 'unsafe-inline' pour les scripts)."""
     page = _PAGE.read_text(encoding="utf-8")
-    script = re.search(r"<script>(.*?)</script>", page, re.DOTALL).group(1)
+    match = re.search(r"<script>(.*?)</script>", page, re.DOTALL)
+    if match is None:
+        raise RuntimeError("screen.html sans <script>")
+    script = match.group(1)
     digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode()
     return page.replace("__SCRIPT_HASH__", digest)
 
@@ -187,14 +190,15 @@ class SecondScreen:
         import webview  # import tardif : lourd, et inutile pour les tests
 
         # Creee masquee a une position neutre ; l'ecran voulu est choisi a chaque show().
-        self._window = webview.create_window(
+        window = self._window = webview.create_window(
             "Dr Vocal",
             html=_page_with_hash(),
             js_api=self._bridge,
             width=800, height=600,
             hidden=True, focus=False, frameless=True, easy_drag=False,
         )
-        self._window.events.loaded += self._on_loaded
+        if window is not None:
+            window.events.loaded += self._on_loaded
         webview.start()
         self._ready = False
         self._window = None
@@ -236,7 +240,7 @@ class SecondScreen:
         if self._hwnd or sys.platform != "win32" or not self._window:
             return
         try:
-            self._hwnd = int(self._window.native.Handle.ToInt64())
+            self._hwnd = int(self._window.native.Handle.ToInt64())  # pyright: ignore[reportOptionalMemberAccess, reportAttributeAccessIssue]
         except Exception:
             return
         _set_noactivate_style(self._hwnd)

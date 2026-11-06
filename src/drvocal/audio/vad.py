@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from drvocal.audio.mic import FRAME_MS, FRAME_SAMPLES, SAMPLE_RATE
+from drvocal.audio.mic import FRAME_MS, FRAME_SAMPLES, SAMPLE_RATE  # noqa: F401  (reexportes)
 
 _CHUNK = 512  # taille de fenetre attendue par Silero a 16 kHz
 _CONTEXT = 64
@@ -77,8 +77,9 @@ def speech_confirmer(vad: Callable[[np.ndarray], bool] | None = None,
     needed = max(min_speech_ms // FRAME_MS, 1)
 
     def confirm(frames: list[np.ndarray]) -> bool:
-        if hasattr(detector, "reset"):
-            detector.reset()
+        reset = getattr(detector, "reset", None)
+        if reset is not None:
+            reset()
         return sum(bool(detector(f)) for f in frames) >= needed
 
     return confirm

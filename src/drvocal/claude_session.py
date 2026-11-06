@@ -12,6 +12,7 @@ import unicodedata
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -126,7 +127,7 @@ class ClaudeRunner:
         self,
         on_event: Callable[[SessionEvent], None],
         ask_user: Callable[[str, str], Awaitable[Reply | str]],
-        client_factory: Callable[[ClaudeAgentOptions], object] = lambda options: ClaudeSDKClient(options=options),
+        client_factory: Callable[[ClaudeAgentOptions], Any] = lambda options: ClaudeSDKClient(options=options),
         ask_timeout: float = 60.0,
     ):
         """`ask_user(texte, kind)` avec kind valant "approval" ou "question"."""
@@ -170,7 +171,7 @@ class ClaudeRunner:
             if entry.tool is None:
                 await self.resume(f"L'utilisateur n'a pas pu répondre à : {entry.summary}. Reformule ou continue.")
             else:
-                self._approved.append((entry.tool, entry.tool_input))  # une seule fois
+                self._approved.append((entry.tool, entry.tool_input or {}))  # une seule fois
                 await self.resume(f"L'utilisateur autorise : {entry.summary}. Tu peux réessayer cette action.")
         return True
 
@@ -181,7 +182,7 @@ class ClaudeRunner:
 
     def _options(self) -> ClaudeAgentOptions:
         # Le hook doit durer plus longtemps que la question vocale, sinon les deux se courent apres.
-        hook = HookMatcher(hooks=[self._pre_tool_use], timeout=self._ask_timeout + 30)
+        hook = HookMatcher(hooks=[self._pre_tool_use], timeout=self._ask_timeout + 30)  # pyright: ignore[reportArgumentType]
         return ClaudeAgentOptions(
             cwd=self._project,
             env=build_env(),
@@ -249,6 +250,8 @@ class ClaudeRunner:
         tool, tool_input = input_data["tool_name"], input_data.get("tool_input") or {}
         if tool == _QUESTION_TOOL:
             return _verdict("ask", "question")  # la reponse passe par can_use_tool
+        if self._project is None:  # aucun outil sans projet ouvert
+            return _verdict("deny", "Aucun projet ouvert.")
         decision = decide(tool, tool_input, self._project)
         if decision is Decision.ALLOW:
             return _verdict("allow")

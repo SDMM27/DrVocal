@@ -1,4 +1,6 @@
 """Actions Spotify (Web API, Premium) : lecture, pause, suivant, precedent, volume."""
+# spotipy annote ses reponses JSON comme optionnelles alors qu'un echec leve SpotifyException.
+# pyright: reportOptionalSubscript=false, reportOptionalMemberAccess=false
 import asyncio
 import difflib
 import logging
@@ -7,8 +9,8 @@ import socket
 import threading
 import time
 import unicodedata
-from functools import lru_cache
 from collections.abc import Callable
+from functools import lru_cache
 from pathlib import Path
 
 import spotipy

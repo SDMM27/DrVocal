@@ -19,6 +19,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import train_wake  # noqa: E402,F401  (met src/ dans sys.path)
+
 from drvocal.__main__ import load_config  # noqa: E402
 from drvocal.audio.stt import Transcriber  # noqa: E402
 from drvocal.intent import parse  # noqa: E402

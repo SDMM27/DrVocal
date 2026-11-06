@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+  schedule:
+    - cron: "0 3 * * *"  # tests lents, chaque nuit
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --extra discord --locked
+      - run: uv run ruff check .
+      - run: uv run pyright
+
+  tests:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.12"
+            extras: "--extra discord"
+          - python: "3.13"
+            extras: ""  # le paquet doit marcher sans discord.py (audioop retire en 3.13)
+          - python: "3.13"
+            extras: "--extra discord"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync ${{ matrix.extras }} --locked
+      - run: uv run pytest -m "not slow"
+      - name: Arbre de travail propre (fins de ligne)
+        shell: bash
+        run: git diff --exit-code && test -z "$(git status --porcelain)"
+
+  slow:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ hashFiles('src/drvocal/audio/stt.py') }}
+      - run: uv sync --extra discord --locked
+      - run: uv run pytest -m slow

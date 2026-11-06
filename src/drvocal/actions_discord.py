@@ -5,6 +5,7 @@ message, commande ou mention : aucun evenement n'est ecoute, pas d'intent messag
 """
 import unicodedata
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 import discord
 
@@ -124,7 +125,8 @@ def register_discord(catalogue: Catalogue, bot: discord.Client, settings: Settin
     def self_toggle(attr: str, kw: str, done: str):
         async def toggle(intent: Intent) -> Outcome:
             _, owner = voice_guild()
-            await owner.edit(**{kw: not getattr(owner.voice, attr)})
+            change: dict[str, Any] = {kw: not getattr(owner.voice, attr)}
+            await owner.edit(**change)
             return Outcome(True, done)
         return toggle
 

@@ -5,7 +5,7 @@ from pathlib import Path
 import drvocal.screen as screen_mod
 from drvocal.claude_policy import Reply
 from drvocal.claude_session import SessionEvent
-from drvocal.screen import SecondScreen, Monitor, parse_pending, render_event, select_monitor
+from drvocal.screen import Monitor, SecondScreen, parse_pending, render_event, select_monitor
 
 MONITORS = [Monitor(0, 0, 1920, 1080), Monitor(1920, 0, 1280, 1024)]
 

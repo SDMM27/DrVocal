@@ -9,7 +9,6 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "claude-agent-sdk>=0.2.176",
-    "discord-py>=2.7.1",
     "faster-whisper>=1.2.1",
     "numpy>=2.5.4",
     "openwakeword>=0.4.0",
@@ -19,6 +18,14 @@ dependencies = [
     "spotipy>=2.26.0",
 ]
 
+[project.optional-dependencies]
+# Bot Discord (avance, administrateurs de serveur). discord.py importe audioop, retire de Python 3.13 :
+# audioop-lts le remplace a partir de 3.13.
+discord = [
+    "discord-py>=2.7.1",
+    "audioop-lts>=0.2.1; python_version >= '3.13'",
+]
+
 [build-system]
 requires = ["uv_build>=0.12.24,<0.13.0"]
 build-backend = "uv_build"
@@ -26,8 +33,10 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "psutil>=7.2.2",
+    "pyright>=1.1.414",
     "pytest",
     "pytest-asyncio>=1.4.1.post1",
+    "ruff>=0.17.4",
 ]
 train = [
     "onnx>=1.23.2",
@@ -41,3 +50,18 @@ asyncio_default_fixture_loop_scope = "function"
 markers = [
     "slow: charge un vrai modele (telechargement, plusieurs secondes)",
 ]
+
+[tool.ruff]
+line-length = 140
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E731", "B008", "B017"]
+
+[tool.pyright]
+include = ["src"]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"

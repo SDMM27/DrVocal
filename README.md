@@ -35,6 +35,10 @@ cd DrVocal
 uv sync
 ```
 
+Pour le bot Discord (facultatif) : `uv sync --extra discord`.
+
+Vérifications de développement (lancées aussi par la CI) : `uv run ruff check .`, `uv run pyright`, `uv run pytest -m "not slow"`.
+
 ### Voix Piper
 
 La voix qui lit les messages Discord et les questions de Claude n'est pas dans le dépôt. Télécharger la voix par défaut dans `models/piper` :

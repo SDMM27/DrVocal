@@ -13,8 +13,8 @@ puis rejoues dans `WakeDetector` a chaque seuil (delai de reprise compris).
 - faux reveil : tout reveil sur un negatif, silence ajoute compris ;
 - croisement : un modele seul (`only=`) qui se declenche sur la phrase d'un autre.
 
-`--split train` = prises 000-055 (diagnostic en echantillon), `--split val` = prises 056-067 (choix du seuil), `--split test` = prises 068-079
-(a ne regarder qu'une fois). Les fichiers de data/voice/ ne sont jamais deplaces.
+`--split train` = prises 000-055 (diagnostic en echantillon), `--split val` = prises 056-067 (choix du seuil),
+`--split test` = prises 068-079 (a ne regarder qu'une fois). Les fichiers de data/voice/ ne sont jamais deplaces.
 """
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import train_wake  # noqa: E402  (importe aussi src/ dans sys.path)
+
 from drvocal.audio.wake import WakeDetector  # noqa: E402
 
 CHUNK = train_wake.CHUNK

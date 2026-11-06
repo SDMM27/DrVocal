@@ -1,0 +1,19 @@
+# Fins de ligne : LF dans le depot et dans l'arbre de travail, quel que soit core.autocrlf.
+* text=auto eol=lf
+
+# Scripts Windows : CRLF obligatoire pour cmd.exe.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binaires : jamais de conversion ni de diff texte.
+*.wav binary
+*.onnx binary
+*.bin binary
+*.pt binary
+*.png binary
+*.ico binary
+*.jpg binary
+*.zip binary
+*.exe binary
+*.dll binary

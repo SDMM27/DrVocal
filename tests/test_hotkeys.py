@@ -78,5 +78,6 @@ def test_example_config_flag_is_top_level_and_off():
 
 def test_input_struct_size_matches_windows_abi():
     import ctypes
+
     from drvocal.actions_hotkeys import _INPUT
     assert ctypes.sizeof(_INPUT) == (40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28)

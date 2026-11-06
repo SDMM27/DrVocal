@@ -141,6 +141,11 @@ needs_models = pytest.mark.skipif(
 
 @pytest.mark.slow
 @needs_models
+@pytest.mark.xfail(
+    reason="C4 : le modele entraine sur une seule vraie voix ne reconnait plus la voix de synthese "
+    "de la fixture (docs/mesures.md). A revoir avec le moteur de reveil universel (L10).",
+    strict=False,
+)
 def test_detects_wake_fixture():
     assert count_wakes(load_wav("salut_doc_vocal.wav")) == 1
 

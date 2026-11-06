@@ -1,12 +1,13 @@
 import dataclasses
 from unittest.mock import AsyncMock, MagicMock
 
-import discord
 import pytest
 
-from drvocal.actions import Catalogue
-from drvocal.actions_discord import BOT_PERMISSIONS, make_client, register_discord, run_bot
-from drvocal.intent import Intent
+discord = pytest.importorskip("discord")
+
+from drvocal.actions import Catalogue  # noqa: E402
+from drvocal.actions_discord import BOT_PERMISSIONS, make_client, register_discord, run_bot  # noqa: E402
+from drvocal.intent import Intent  # noqa: E402
 
 OWNER = 99
 

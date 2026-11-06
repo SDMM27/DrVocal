@@ -526,7 +526,10 @@ def test_preload_loads_library_without_any_action(client):
 
 
 def test_library_match_is_fast_on_3000_names():
-    import random, string, time
+    import random
+    import string
+    import time
+
     from drvocal.actions_spotify import _library_match
     rnd = random.Random(1)
     entries = [("".join(rnd.choice(string.ascii_lowercase + " ") for _ in range(rnd.randint(15, 30))),
