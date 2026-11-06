@@ -179,9 +179,10 @@ def _register_optional(catalogue, settings: Settings, ears, speaker, background:
     if settings.spotify_client_id:
         try:
             from drvocal.actions_spotify import SecretStoreCacheHandler, build_client, register_spotify
+            from drvocal.spotify_aliases import Aliases
 
             client = build_client(settings.spotify_client_id, SecretStoreCacheHandler(store))
-            library = register_spotify(catalogue, client)
+            library = register_spotify(catalogue, client, aliases=Aliases(data_dir() / "spotify_aliases.json"))
         except Exception:
             log.exception("Spotify indisponible")
     if settings.discord_bot_token and settings.discord_owner_id:

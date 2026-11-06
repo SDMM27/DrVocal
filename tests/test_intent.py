@@ -120,7 +120,8 @@ def test_different_sentences_are_not_merged(settings):
     ("mets la playlist de chill", "chill"),
 ])
 def test_my_playlist_anywhere_in_short_sentence(text, query, settings):
-    assert parse(text, settings) == Intent("spotify.play", {"query": query, "kind": "playlist"})
+    mine = {"mine": "1"} if " ma " in text.lower() or " ma playlist" in text.lower() else {}
+    assert parse(text, settings) == Intent("spotify.play", {"query": query, "kind": "playlist", **mine})
 
 
 @pytest.mark.parametrize("text", ["lance le DJ sur Spotify", "mets le DJ", "DJ", "lance le di-jay",
@@ -140,3 +141,37 @@ def test_artist_named_dj_is_still_a_search(settings):
 @pytest.mark.parametrize("text", ["mets de la musique", "lance la musique", "joue de la musique sur Spotify"])
 def test_generic_music_request_resumes(text, settings):
     assert parse(text, settings) == Intent("spotify.resume", {})
+
+
+@pytest.mark.parametrize("text,query", [
+    ("Lance ma playlist, Rital List sur Spotify", "Rital List"),
+    ("Lance, ma playlist Rital List sur Spotify.", "Rital List"),
+])
+def test_inner_punctuation_from_whisper_is_ignored_for_playlists(text, query, settings):
+    assert parse(text, settings) == Intent("spotify.play", {"query": query, "kind": "playlist", "mine": "1"})
+
+
+def test_inner_punctuation_is_stripped_from_play_queries(settings):
+    assert parse("Mets, Daft Punk.", settings) == Intent("spotify.play", {"query": "Daft Punk"})
+
+
+def test_my_playlist_is_marked_mine_but_the_playlist_is_not(settings):
+    assert parse("lance mes playlists sport", settings).args.get("mine") == "1"
+    assert "mine" not in parse("lance la playlist sport", settings).args
+
+
+@pytest.mark.parametrize("text,name", [
+    ("Retiens cette playlist sous le nom En boucle", "En boucle"),
+    ("retiens cette playlist sous le nom de En boucle.", "En boucle"),
+    ("Retiens, cette playlist, comme На повторе.", "На повторе"),
+    ("Enregistre cette playlist sous le nom daily mix 1 !", "daily mix 1"),
+    ("enregistre cette playlist comme Sport", "Sport"),
+    ("Retiens cette playlist en tant que Sport", "Sport"),
+    ("Appelle cette playlist Chill", "Chill"),
+    ("retiens ce morceau sous le nom Mon tube", "Mon tube"),
+    ("retiens ce titre comme Mon tube", "Mon tube"),
+    ("enregistre cet album sous le nom Vieux disque", "Vieux disque"),
+    ("appelle cet artiste Mon groupe", "Mon groupe"),
+])
+def test_remember_phrasings(text, name, settings):
+    assert parse(text, settings) == Intent("spotify.remember", {"name": name})

@@ -20,6 +20,7 @@ from spotipy.oauth2 import SpotifyPKCE
 
 from drvocal.actions import Catalogue, Outcome
 from drvocal.intent import Intent
+from drvocal.spotify_aliases import Aliases
 
 log = logging.getLogger(__name__)
 
@@ -245,10 +246,11 @@ def _start(client: spotipy.Spotify, launch: Callable[[], None] | None, **play_kw
 class Library:
     """Artistes, playlists et titres de l'utilisateur (suivis, likes, ecoutes), charges une seule fois par heure."""
 
-    def __init__(self, client: spotipy.Spotify):
+    def __init__(self, client: spotipy.Spotify, aliases: Aliases | None = None):
         self._client = client
+        self._aliases = aliases
         self._entries: list[tuple[str, str]] = []
-        self.strong: frozenset[str] = frozenset()  # uri des sources fortes (suivis, top, playlists)
+        self._loaded_strong: frozenset[str] = frozenset()
         self._loaded_at: float | None = None
         self._lock = threading.Lock()
 
@@ -258,14 +260,26 @@ class Library:
             if self._loaded_at is None or now - self._loaded_at > LIBRARY_TTL:
                 self._entries = self._load()
                 self._loaded_at = now
-            return self._entries
+            return self._with_aliases(self._entries)
+
+    @property
+    def strong(self) -> frozenset[str]:
+        """Uri des sources fortes (suivis, top, playlists) et des alias appris a la voix."""
+        return self._loaded_strong | {uri for _, uri in self._alias_items()}
+
+    def _alias_items(self) -> list[tuple[str, str]]:
+        return self._aliases.items() if self._aliases else []
+
+    def _with_aliases(self, entries: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        # lus a chaque appel : un alias qui vient d'etre appris sert tout de suite, sans rechargement
+        return entries + self._alias_items()
 
     def preload(self) -> None:
         self.entries()
 
     def vocabulary(self, limit: int = 40) -> list[str]:
         """Noms d'artistes et de playlists forts, sans jamais charger ni attendre le reseau (playlists d'abord)."""
-        entries, strong = self._entries, self.strong
+        entries, strong = self._with_aliases(self._entries), self.strong
         playlists = [n for n, uri in entries if uri in strong and uri.startswith("spotify:playlist:")]
         artists = [n for n, uri in entries if uri in strong and uri.startswith("spotify:artist:")]
         return (playlists + artists)[:limit]
@@ -309,7 +323,7 @@ class Library:
                         add(f"{artists[0]['name']} {item['name']}", item["uri"], is_strong)
                     for a in artists:  # artistes ecoutes sans etre suivis
                         add(a["name"], a["uri"], is_strong)
-        self.strong = frozenset(strong)
+        self._loaded_strong = frozenset(strong)
         return [(name, uri) for (_, uri), name in found.items()]
 
 
@@ -380,27 +394,41 @@ def _play_uri(start: Callable[..., Outcome], uri: str) -> Outcome:
     return start(uris=[uri]) if uri.startswith("spotify:track:") else start(context_uri=uri)
 
 
+def _close_name(items: list[dict | None], query: str) -> dict | None:
+    """Element au nom proche de la requete (meilleure ressemblance, seuil ARTIST_SIMILARITY)."""
+    target = _letters(query)
+    best, best_ratio = None, ARTIST_SIMILARITY
+    for item in (i for i in items if i):
+        ratio = difflib.SequenceMatcher(None, _letters(item.get("name", "")), target).ratio()
+        if ratio >= best_ratio:
+            best, best_ratio = item, ratio
+    return best
+
+
 def _play_playlist(client: spotipy.Spotify, query: str, start: Callable[..., Outcome],
-                   library: Library | None) -> Outcome:
-    """ "ma playlist X" : d'abord les playlists de l'utilisateur, puis le catalogue."""
-    mine = [(n, u) for n, u in (library.entries() if library else []) if u.startswith("spotify:playlist:")]
-    if uri := _library_match(mine, query, strong=library.strong if library else None):
+                   library: Library | None, mine: bool = False) -> Outcome:
+    """ "ma playlist X" : bibliotheque et alias seulement ; "la playlist X" : puis le catalogue, si le nom est proche."""
+    own = [(n, u) for n, u in (library.entries() if library else []) if u.startswith("spotify:playlist:")]
+    if uri := _library_match(own, query, strong=library.strong if library else None):
         return start(context_uri=uri)
+    if mine:  # jamais la playlist d'un inconnu pour "ma playlist"
+        return Outcome(False, "Je ne trouve pas cette playlist dans ta bibliothèque. "
+                              "Lance-la puis dis : retiens cette playlist sous le nom …")
     res = client.search(q=query, type="playlist", limit=SEARCH_LIMIT)
     found = [p for p in ((res.get("playlists") or {}).get("items") or []) if p]
-    if not found:
+    hit = _name_matches(found, query) or _close_name(found, query)
+    if hit is None:
         return Outcome(False, "Je n'ai pas trouvé cette playlist.")
-    hit = _name_matches(found, query) or found[0]
     return start(context_uri=hit["uri"])
 
 
 def _play_query(client: spotipy.Spotify, query: str, launch: Callable[[], None] | None,
-                library: Library | None = None, kind: str | None = None) -> Outcome:
+                library: Library | None = None, kind: str | None = None, mine: bool = False) -> Outcome:
     def start(**play_kwargs) -> Outcome:
         return Outcome(True) if _start(client, launch, **play_kwargs) else Outcome(False, NOT_STARTED)
 
     if kind == "playlist":
-        return _play_playlist(client, query, start, library)
+        return _play_playlist(client, query, start, library, mine)
 
     # Ordre : nom quasi exact de la bibliotheque, nom exact du catalogue, puis seulement
     # nom approximatif de la bibliotheque (sinon un nom bien transcrit serait detourne).
@@ -424,12 +452,14 @@ def _play_query(client: spotipy.Spotify, query: str, launch: Callable[[], None] 
 
 
 def register_spotify(catalogue: Catalogue, client: spotipy.Spotify,
-                     launch: Callable[[], None] | None = launch_spotify_app, preload: bool = True) -> Library:
+                     launch: Callable[[], None] | None = launch_spotify_app, preload: bool = True,
+                     aliases: Aliases | None = None) -> Library:
     """`launch` ouvre l'application quand aucun appareil n'est la (lancer une musique seulement).
 
     `preload` charge la bibliotheque en arriere-plan pour que la premiere commande n'attende pas.
+    `aliases` : noms appris a la voix ("retiens cette playlist sous le nom ..."), entrees fortes de la bibliotheque.
     """
-    library = Library(client)
+    library = Library(client, aliases)
     if preload:
         threading.Thread(target=library.preload, daemon=True, name="spotify-library").start()
 
@@ -451,7 +481,17 @@ def register_spotify(catalogue: Catalogue, client: spotipy.Spotify,
         return run
 
     def play(intent: Intent) -> Outcome:
-        return _play_query(client, intent.args["query"], launch, library, intent.args.get("kind"))
+        return _play_query(client, intent.args["query"], launch, library, intent.args.get("kind"), "mine" in intent.args)
+
+    def remember(intent: Intent) -> Outcome:
+        assert aliases is not None  # enregistree seulement avec des alias
+        state = _playback(client)
+        uri = (state.get("context") or {}).get("uri") or _item_uri(state)
+        if not uri:
+            return Outcome(False, "Rien ne joue sur Spotify.")
+        name = intent.args["name"]
+        aliases.add(name, uri)
+        return Outcome(True, f"C'est noté : {name}.")
 
     def volume(intent: Intent) -> Outcome:
         level = intent.args.get("level", "")
@@ -473,6 +513,8 @@ def register_spotify(catalogue: Catalogue, client: spotipy.Spotify,
         return Outcome(True) if _start(client, launch, context_uri=DJ_URI) else Outcome(False, NOT_STARTED)
 
     action("spotify.dj", dj)
+    if aliases is not None:
+        action("spotify.remember", remember)
     action("spotify.next", simple(client.next_track))
     action("spotify.previous", simple(client.previous_track))
     action("spotify.volume", volume)

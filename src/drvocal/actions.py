@@ -12,6 +12,7 @@ ACTION_NAMES = frozenset({
     "spotify.previous",
     "spotify.volume",
     "spotify.dj",
+    "spotify.remember",
     "discord.mute_self",
     "discord.deafen_self",
     "discord.message",

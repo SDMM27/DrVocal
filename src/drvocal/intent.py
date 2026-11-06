@@ -56,7 +56,11 @@ _CONTINUE = _rx(rf"^continue avec claude {_DE}(.+)$")
 _PLAY = _rx(r"^(?:je )?(?:mets|joue|lance|ouvre|j'ouvre) (.+)$")  # "Je joue..." : Whisper ajoute parfois "Je"
 # "ma playlist X" n'importe ou dans une phrase courte : le verbe est souvent mal transcrit
 # ("J'ouvre ma playlist...", "Je vous ma playlist...").
-_MY_PLAYLIST = _rx(r"(?:^|\s)(?:ma|mes|la) playlists? (.+)$")
+_MY_PLAYLIST = _rx(r"(?:^|\s)(?P<det>ma|mes|la) playlists? (?P<q>.+)$")
+# "retiens cette playlist sous le nom X" : apprend l'uri de ce qui joue (playlists invisibles a l'API).
+_REMEMBER = _rx(r"^(?:retiens|retient|enregistre|memorise|appelle|nomme) "
+                r"(?:cette (?:playlist|chanson)|ce (?:morceau|titre)|cet (?:album|artiste))"
+                r"(?: (?:sous le nom de|sous le nom|sous|en tant que|comme))? (.+)$")
 _MY_PLAYLIST_MAX_WORDS = 10
 _DJ_LAST = re.compile(r"(?:^|[\s'])dj$")
 # "mets" mal transcrit par Whisper : "mais daft punk", "Medaft Punk" (colle au mot suivant).
@@ -97,6 +101,9 @@ def _unrepeat(text: str) -> str:
     return text
 
 
+_INNER_PUNCT = re.compile(r"[,;:!?…]")
+
+
 def parse(text: str, settings: Settings) -> Intent | None:
     orig = _clean(_unrepeat(text))
     if not orig:
@@ -106,6 +113,9 @@ def parse(text: str, settings: Settings) -> Intent | None:
     if t in canonical:
         orig = _clean(canonical[t])
         t = _fold(orig)
+    # Whisper ponctue a l'interieur des phrases ("Lance, ma playlist..."). On ne le voit que dans le
+    # texte compare (meme longueur) ; les arguments sont toujours pris dans `orig`.
+    t = _INNER_PUNCT.sub(" ", t)
 
     for action, rx in _SIMPLE_RULES:
         if rx.match(t):
@@ -140,9 +150,15 @@ def parse(text: str, settings: Settings) -> Intent | None:
     if len(t.split()) <= _MISHEARD_MAX_WORDS and _DJ_LAST.search(t):
         return Intent("spotify.dj", {})
 
+    if m := _REMEMBER.match(t):
+        return Intent("spotify.remember", {"name": orig[m.start(1):].strip(" ,;:!?…")})
+
     if len(t.split()) <= _MY_PLAYLIST_MAX_WORDS and (m := _MY_PLAYLIST.search(t)):
-        intent = _play(orig, t, m.start(1))
-        return Intent("spotify.play", {**intent.args, "kind": "playlist"})
+        intent = _play(orig, t, m.start("q"))
+        args = {**intent.args, "kind": "playlist"}
+        if m.group("det") in ("ma", "mes"):
+            args["mine"] = "1"  # "ma playlist" : jamais celle d'un inconnu dans le catalogue
+        return Intent("spotify.play", args)
 
     if m := _PLAY.match(t):
         return _play(orig, t, m.start(1))
@@ -161,4 +177,4 @@ def _play(orig: str, folded: str, start: int) -> Intent:
     end = len(folded)
     if (s := _ON_SPOTIFY.search(folded, start)) and s.start() > start:
         end = s.start()
-    return Intent("spotify.play", {"query": orig[start:end]})
+    return Intent("spotify.play", {"query": orig[start:end].strip(" ,;:!?…")})

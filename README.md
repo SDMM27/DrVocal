@@ -151,6 +151,8 @@ Spotify demande un compte **Premium** pour le contrôle de lecture.
 
 **Bibliothèque prioritaire** : avant toute recherche, « mets… » compare ce que tu dis à tes artistes suivis, tes playlists, tes titres likés, tes écoutes récentes et tes plus écoutés (artistes et titres), jusqu'à 1000 titres likés. Un artiste écouté sans être suivi y entre aussi, et un titre se dit avec ou sans son artiste (« Mc Pao fausse richesse »). Elle se charge en arrière-plan au démarrage et se recharge toutes les heures ; les titres exigent une correspondance plus proche que les artistes. Un nom approximatif suffit (la transcription déforme souvent les noms : « d'Ariano » joue Daryana). Sans correspondance, la recherche Spotify classique prend le relais.
 
+**Playlists générées par Spotify** (« En boucle », Daily Mix, Découvertes de la semaine…) : l'API ne les voit pas en mode développement (absentes de ta bibliothèque et de la recherche), mais Spotify sait les lire par leur adresse. Lance-en une dans Spotify, puis dis « retiens cette playlist sous le nom En boucle » (ou « enregistre cette playlist comme… », « appelle cette playlist… ») : Dr Vocal garde l'adresse de ce qui joue dans `spotify_aliases.json` (dossier de données) et « lance ma playlist en boucle » fonctionne aussitôt. Même chose avec « ce morceau », « cet album » ou « cet artiste ». « Ma playlist X » ne cherche jamais dans le catalogue public : sans correspondance dans ta bibliothèque et tes alias, Dr Vocal le dit au lieu de lancer la playlist d'un inconnu.
+
 **Après une mise à jour** qui ajoute des permissions, relancer `uv run python tools/spotify_login.py` pour réautoriser ; sinon, spotipy refuse l'ancien jeton et le navigateur s'ouvre au premier ordre Spotify.
 
 Dr Vocal vérifie que la lecture démarre vraiment et retente une fois sur l'application du PC sinon.
@@ -211,6 +213,7 @@ Les commandes sont analysées par des règles (accents et majuscules ignorés), 
   - « musique suivante », « chanson suivante », « suivant », « passe la musique »
   - « musique précédente », « précédent »
   - « volume 40 » (ou « volume 40 pour cent »)
+  - « retiens cette playlist sous le nom En boucle », « enregistre cette playlist comme Sport », « appelle cet artiste Mon groupe » : mémorise ce qui joue sous ce nom
 - **Discord**
   - « coupe mon micro », « mute-moi » ; « mets-moi en sourdine »
   - « écris dans général salut tout le monde » : le message est relu à voix haute, puis envoyé après 4 s sauf si tu dis « annule »

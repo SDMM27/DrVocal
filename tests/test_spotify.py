@@ -3,10 +3,11 @@ from unittest.mock import MagicMock
 import pytest
 from spotipy import SpotifyException
 
-from drvocal.actions import Catalogue
+from drvocal.actions import Catalogue, Outcome
 from drvocal.actions_spotify import register_spotify
 from drvocal.intent import Intent
 from drvocal.secrets_store import SecretStore
+from drvocal.spotify_aliases import Aliases
 
 NO_DEVICE = SpotifyException(404, -1, "NO_ACTIVE_DEVICE")
 
@@ -397,7 +398,7 @@ async def test_my_playlist_searches_only_my_playlists_first(client):
     client.search.assert_not_called()
 
 
-async def test_unknown_playlist_falls_back_to_catalogue_playlists(client):
+async def test_unknown_playlist_falls_back_to_close_catalogue_playlist(client):
     client.search.return_value = _search(playlists=[None, _item("Disco 80", "spotify:playlist:d80")])
     await run(client, "spotify.play", query="disco", kind="playlist")
     assert client.search.call_args.kwargs["type"] == "playlist"
@@ -582,7 +583,69 @@ def test_library_vocabulary_never_loads_and_filters(client):
     client.current_user_followed_artists.assert_not_called()
     lib._entries = [("Zaz", "spotify:artist:1"), ("Mix", "spotify:playlist:1"), ("Faible", "spotify:artist:2"),
                     ("Titre", "spotify:track:1"), ("Autre", "spotify:artist:3")]
-    lib.strong = frozenset({"spotify:artist:1", "spotify:playlist:1", "spotify:track:1", "spotify:artist:3"})
+    lib._loaded_strong = frozenset({"spotify:artist:1", "spotify:playlist:1", "spotify:track:1", "spotify:artist:3"})
     assert lib.vocabulary() == ["Mix", "Zaz", "Autre"]
     assert lib.vocabulary(limit=2) == ["Mix", "Zaz"]
     client.current_user_followed_artists.assert_not_called()
+
+
+def _aliased(client, tmp_path):
+    cat, aliases = Catalogue(), Aliases(tmp_path / "aliases.json")
+    register_spotify(cat, client, preload=False, aliases=aliases)
+    return cat, aliases
+
+
+async def test_remember_playlist_context_then_play_it_immediately(client, tmp_path):
+    cat, aliases = _aliased(client, tmp_path)
+    uri = "spotify:playlist:37i9dQZF1EpumwTEC0haas"
+    client.current_playback.side_effect = None
+    client.current_playback.return_value = {"is_playing": True, "context": {"uri": uri, "type": "playlist"},
+                                            "item": {"uri": "spotify:track:1"}}
+    out = await cat.run(Intent("spotify.remember", {"name": "En boucle"}))
+    assert out == Outcome(True, "C'est noté : En boucle.")
+    assert aliases.items() == [("En boucle", uri)]
+    client.current_playback.side_effect = lambda: playing_what_was_asked(client)
+    await cat.run(Intent("spotify.play", {"query": "en boucle", "kind": "playlist", "mine": "1"}))
+    client.start_playback.assert_called_once_with(context_uri=uri)
+    client.search.assert_not_called()
+    client.current_user_playlists.assert_called_once()  # bibliotheque chargee avant l'alias, alias vu quand meme
+
+
+async def test_remember_falls_back_to_current_track_and_plays_it(client, tmp_path):
+    cat, _ = _aliased(client, tmp_path)
+    client.current_playback.side_effect = None
+    client.current_playback.return_value = {"is_playing": True, "item": {"uri": "spotify:track:77"}}
+    assert (await cat.run(Intent("spotify.remember", {"name": "Mon tube"}))).ok
+    client.current_playback.side_effect = lambda: playing_what_was_asked(client)
+    await cat.run(Intent("spotify.play", {"query": "mon tube"}))
+    client.start_playback.assert_called_once_with(uris=["spotify:track:77"])
+
+
+async def test_remember_with_nothing_playing(client, tmp_path):
+    cat, aliases = _aliased(client, tmp_path)
+    client.current_playback.side_effect = None
+    client.current_playback.return_value = None
+    assert await cat.run(Intent("spotify.remember", {"name": "X"})) == Outcome(False, "Rien ne joue sur Spotify.")
+    assert aliases.items() == []
+
+
+async def test_cyrillic_alias_is_found_by_latin_query(client, tmp_path):
+    cat, aliases = _aliased(client, tmp_path)
+    aliases.add("На повторе", "spotify:playlist:37i9loop")
+    await cat.run(Intent("spotify.play", {"query": "na povtore", "kind": "playlist", "mine": "1"}))
+    client.start_playback.assert_called_once_with(context_uri="spotify:playlist:37i9loop")
+
+
+async def test_my_unknown_playlist_never_searches_the_catalogue(client):
+    out = await run(client, "spotify.play", query="inconnue", kind="playlist", mine="1")
+    assert not out.ok
+    assert "retiens cette playlist" in out.speak
+    client.search.assert_not_called()
+    client.start_playback.assert_not_called()
+
+
+async def test_the_playlist_without_close_name_starts_nothing(client):
+    client.search.return_value = _search(playlists=[_item("Totalement autre chose", "spotify:playlist:x")])
+    out = await run(client, "spotify.play", query="sport", kind="playlist")
+    assert not out.ok
+    client.start_playback.assert_not_called()
