@@ -151,10 +151,16 @@ class ClaudeRunner:
         self._client: Any = None
         self._stopped = False
         self._run_lock = asyncio.Lock()  # une seule execution de Claude a la fois
+        # Incremente par stop() : un start/resume demande avant l'arret et encore en file derriere
+        # _run_lock ne doit pas relancer Claude apres coup.
+        self._generation = 0
         self._ask_lock = asyncio.Lock()  # un seul « oui docteur » attendu a la fois
 
     async def start(self, project: Path, prompt: str) -> None:
+        generation = self._generation
         async with self._run_lock:
+            if generation != self._generation:
+                return  # arrete pendant l'attente du verrou
             reason = self._validate_project(project)
             if reason:  # defense en profondeur : register_claude filtre deja les projets
                 self._emit(SessionEvent("error", reason))
@@ -166,7 +172,10 @@ class ClaudeRunner:
             await self._run(prompt)
 
     async def resume(self, prompt: str) -> None:
+        generation = self._generation
         async with self._run_lock:
+            if generation != self._generation:
+                return  # arrete pendant l'attente du verrou
             if self._project is None or self._session_id is None:
                 self._emit(SessionEvent("error", "Aucune session Claude à reprendre."))
                 self._emit(SessionEvent("done", ""))
@@ -174,8 +183,11 @@ class ClaudeRunner:
             await self._run(prompt)
 
     async def stop(self) -> None:
-        """Interrompt l'execution en cours (moins de 2 s) et oublie les approbations accordees."""
+        """Interrompt l'execution en cours (moins de 2 s), annule les relances en file et oublie
+        les approbations accordees et les demandes en attente (aucune ne pourra relancer la session)."""
+        self._generation += 1
         self._approved.clear()
+        self.pending.clear()
         task = self._task
         if task is None or task.done():
             self._emit(SessionEvent("text", "Aucune session Claude en cours."))

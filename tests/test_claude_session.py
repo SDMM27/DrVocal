@@ -14,7 +14,7 @@ from claude_agent_sdk import (
 )
 
 from drvocal.claude_policy import Reply
-from drvocal.claude_session import ClaudeRunner, SessionEvent
+from drvocal.claude_session import ClaudeRunner, SessionEvent, _Pending
 
 P = Path("D:/proj")
 KEY = "sk-test"
@@ -683,6 +683,35 @@ async def test_stop_calls_interrupt_and_survives_a_hanging_interrupt():
     await h.runner.stop()
     await asyncio.wait_for(task, 2)
     assert calls == [1] and asyncio.get_running_loop().time() - t0 < 2
+
+
+async def test_stop_cancels_a_resume_queued_behind_the_running_session():
+    h = Harness()
+    h.during = hang
+    first = asyncio.create_task(h.runner.start(P, "x"))
+    while not h.clients:
+        await asyncio.sleep(0.01)
+    h.runner._session_id = "s1"  # session reprenable
+    queued = asyncio.create_task(h.runner.resume("encore"))  # attend le verrou
+    await asyncio.sleep(0.05)
+    await h.runner.stop()
+    await asyncio.wait_for(asyncio.gather(first, queued), 2)
+    assert len(h.clients) == 1  # la relance en file n'a jamais lance Claude
+
+
+async def test_stop_forgets_pending_requests():
+    h = Harness()
+    h.during = hang
+    task = asyncio.create_task(h.runner.start(P, "x"))
+    while not h.clients:
+        await asyncio.sleep(0.01)
+    h.runner._add_pending(_Pending("Bash : rm", "Bash", {"command": "rm"}, screen_only=True))
+    pending_id = next(iter(h.runner.pending))
+    await h.runner.stop()
+    await asyncio.wait_for(task, 2)
+    assert h.runner.pending == {}
+    assert await h.runner.resolve_pending(pending_id, Reply.APPROVE) is False
+    assert len(h.clients) == 1
 
 
 async def test_stop_without_session_says_so():
