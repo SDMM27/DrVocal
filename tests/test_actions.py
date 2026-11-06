@@ -46,4 +46,4 @@ def test_action_names_are_the_expected_closed_set():
         "spotify.play", "spotify.pause", "spotify.resume", "spotify.next", "spotify.previous",
         "spotify.volume", "spotify.dj", "discord.mute_self", "discord.deafen_self", "discord.message",
         "discord.move_self", "discord.mute_member", "notes.start", "claude.prompt",
-        "claude.continue"})
+        "claude.continue", "claude.stop"})

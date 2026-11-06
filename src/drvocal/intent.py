@@ -45,6 +45,8 @@ _SIMPLE_RULES = [
     ("spotify.next", _rx(r"^(?:musique suivante|chanson suivante|morceau suivant|suivant|passe la (?:musique|chanson))$")),
     ("spotify.previous", _rx(r"^(?:musique precedente|chanson precedente|morceau precedent|precedent)$")),
     ("notes.start", _rx(r"^(?:prends|prend|fais|ecris) une note$")),
+    ("claude.stop", _rx(r"^(?:arrete|arretes|stop|stoppe|annule|coupe|termine) (?:la |cette )?(?:session )?(?:de )?"
+                        r"claude(?: agent)?$")),
 ]
 _VOLUME = _rx(r"^volume (\d{1,3})\s*(?:%|pour\s*cent)?$")
 _MESSAGE = _rx(r"^(?:ecris|envoie) dans (?:le salon )?(.+)$")

@@ -128,13 +128,20 @@ async def amain(settings: Settings, screen) -> None:
 
     catalogue = Catalogue()
     register_notes(catalogue, ears, settings.notes_dir, player, timings)
-    runner = ClaudeRunner(make_event_handler(player, push), make_ask_user(ears, speaker, timings))
-    register_claude(catalogue, runner, settings)
+    store = default_store()
+
+    def claude_api_key() -> str | None:
+        # Magasin chiffre d'abord ; la variable d'environnement reste un repli de developpement.
+        return store.get("claude_api_key") or os.environ.get("ANTHROPIC_API_KEY") or None
+
+    runner = ClaudeRunner(make_event_handler(player, push), make_ask_user(ears, speaker, timings),
+                          api_key_provider=claude_api_key, audit_path=logs_dir() / "claude-audit.jsonl")
+    register_claude(catalogue, runner, settings, api_key_provider=claude_api_key)
     screen.on_decision(lambda pending_id, reply: asyncio.run_coroutine_threadsafe(
         runner.resolve_pending(pending_id, reply), loop))
 
     background: set[asyncio.Task] = set()
-    library = _register_optional(catalogue, settings, ears, speaker, background, default_store())
+    library = _register_optional(catalogue, settings, ears, speaker, background, store)
     if library is not None:
         spotify_library.append(library)
 

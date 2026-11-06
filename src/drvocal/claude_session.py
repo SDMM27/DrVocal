@@ -1,12 +1,13 @@
-"""Pilotage de Claude Code en arriere-plan avec la connexion Pro de l'utilisateur.
+"""Pilotage de Claude Agent en arriere-plan avec la cle API Anthropic de l'utilisateur (facultatif).
 
-La politique est appliquee dans un hook PreToolUse, qui s'execute pour chaque
-outil (sous-agents compris) meme si une regle utilisateur l'autoriserait deja.
-Aucun mode qui contourne les autorisations n'est utilise.
+Sans cle, aucune session ne demarre. La politique est appliquee dans un hook PreToolUse, qui
+s'execute pour chaque outil (sous-agents compris) meme si une regle utilisateur l'autoriserait
+deja. Aucun mode qui contourne les autorisations n'est utilise.
 """
 import asyncio
 import itertools
 import json
+import logging
 import os
 import unicodedata
 from collections.abc import Awaitable, Callable
@@ -27,7 +28,10 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 
-from drvocal.claude_policy import Decision, Reply, decide
+from drvocal.claude_audit import AuditLog
+from drvocal.claude_policy import VOICE_APPROVABLE_TOOLS, Decision, Reply, decide, validate_project_root
+
+log = logging.getLogger(__name__)
 
 _QUESTION_TOOL = "AskUserQuestion"
 _NO_ANSWER = "L'utilisateur n'a pas répondu."
@@ -38,7 +42,7 @@ class _Pending:
     summary: str
     tool: str | None = None  # None : simple question, aucune approbation d'outil
     tool_input: dict | None = None
-    screen_only: bool = False  # trop long pour une autorisation vocale
+    screen_only: bool = False  # pas d'autorisation vocale : outil sensible ou texte trop long
 
 
 @dataclass(frozen=True)
@@ -48,19 +52,9 @@ class SessionEvent:
     question: bool = False  # pending : une question de Claude, pas une autorisation
 
 
-_FORBIDDEN_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
-
-
-def build_env() -> dict[str, str]:
-    """Environnement sans cle API, pour que la facturation reste sur l'abonnement."""
-    return {k: v for k, v in os.environ.items() if k not in _FORBIDDEN_ENV}
-
-
-def scrub_environ() -> None:
-    """Retire les cles du processus : le SDK fusionne options.env PAR-DESSUS os.environ,
-    donc une cle simplement omise de options.env serait heritee par Claude Code."""
-    for key in _FORBIDDEN_ENV:
-        os.environ.pop(key, None)
+def env_api_key() -> str | None:
+    """Fournisseur de cle par defaut : variable d'environnement ANTHROPIC_API_KEY."""
+    return os.environ.get("ANTHROPIC_API_KEY", "").strip() or None
 
 
 _SUMMARY_KEYS = {
@@ -71,6 +65,7 @@ _SUMMARY_KEYS = {
     "Read": ("file_path",),
     "Write": ("file_path",),
     "Edit": ("file_path",),
+    "MultiEdit": ("file_path",),
     "NotebookEdit": ("notebook_path",),
     "Task": ("subagent_type", "prompt"),
     "Agent": ("subagent_type", "prompt"),
@@ -103,7 +98,7 @@ def _screen_text(pending_id: str, entry: "_Pending") -> str:
     if entry.tool_input is not None:
         text += "\n" + json.dumps(entry.tool_input, ensure_ascii=False, separators=(",", ":"), default=str)
     if entry.screen_only:
-        text += "\nTrop long pour être lu : à autoriser sur le deuxième écran."
+        text += "\nPas d'autorisation vocale possible (outil sensible ou texte trop long) : à autoriser sur le deuxième écran."
     return text
 
 
@@ -129,23 +124,42 @@ class ClaudeRunner:
         ask_user: Callable[[str, str], Awaitable[Reply | str]],
         client_factory: Callable[[ClaudeAgentOptions], Any] = lambda options: ClaudeSDKClient(options=options),
         ask_timeout: float = 60.0,
+        api_key_provider: Callable[[], str | None] = env_api_key,
+        max_turns: int = 30,
+        max_budget_usd: float = 2.0,
+        max_duration: float = 15 * 60.0,
+        audit_path: Path | None = None,
+        project_validator: Callable[[Path], str | None] = validate_project_root,
     ):
         """`ask_user(texte, kind)` avec kind valant "approval" ou "question"."""
-        scrub_environ()
         self._emit = on_event
         self._ask_user = ask_user
         self._factory = client_factory
         self._ask_timeout = ask_timeout
+        self._api_key_provider = api_key_provider
+        self._max_turns = max_turns
+        self._max_budget_usd = max_budget_usd
+        self._max_duration = max_duration
+        self._audit = AuditLog(audit_path)
+        self._validate_project = project_validator
         self._project: Path | None = None
         self._session_id: str | None = None
         self._ids = itertools.count(1)
         self.pending: dict[str, _Pending] = {}
         self._approved: list[tuple[str, dict]] = []
+        self._task: asyncio.Task | None = None  # execution en cours, arretable par stop()
+        self._client: Any = None
+        self._stopped = False
         self._run_lock = asyncio.Lock()  # une seule execution de Claude a la fois
         self._ask_lock = asyncio.Lock()  # un seul « oui docteur » attendu a la fois
 
     async def start(self, project: Path, prompt: str) -> None:
         async with self._run_lock:
+            reason = self._validate_project(project)
+            if reason:  # defense en profondeur : register_claude filtre deja les projets
+                self._emit(SessionEvent("error", reason))
+                self._emit(SessionEvent("done", ""))
+                return
             self._project, self._session_id = project, None
             self.pending.clear()
             self._approved.clear()
@@ -158,6 +172,24 @@ class ClaudeRunner:
                 self._emit(SessionEvent("done", ""))
                 return
             await self._run(prompt)
+
+    async def stop(self) -> None:
+        """Interrompt l'execution en cours (moins de 2 s) et oublie les approbations accordees."""
+        self._approved.clear()
+        task = self._task
+        if task is None or task.done():
+            self._emit(SessionEvent("text", "Aucune session Claude en cours."))
+            return
+        self._stopped = True
+        self._emit(SessionEvent("text", "Claude Agent arrêté."))
+        interrupt = getattr(self._client, "interrupt", None)
+        if interrupt is not None:
+            try:
+                await asyncio.wait_for(interrupt(), 1.0)
+            except Exception:  # TimeoutError compris : la tache est annulee de toute facon
+                pass
+        task.cancel()
+        await asyncio.wait({task}, timeout=0.5)
 
     async def resolve_pending(self, pending_id: str, reply: Reply) -> bool:
         """Traite une demande restee sans reponse ; une approbation relance la session."""
@@ -180,34 +212,61 @@ class ClaudeRunner:
         self.pending[pending_id] = entry
         self._emit(SessionEvent("pending", _screen_text(pending_id, entry), question=entry.tool is None))
 
-    def _options(self) -> ClaudeAgentOptions:
+    # Mode de permission : "dontAsk" + allowed_tools evalue, non retenu. En dontAsk tout ce qui n'est pas
+    # pre-approuve est refuse sans appeler can_use_tool, or AskUserQuestion (les questions vocales de Claude)
+    # en depend ; et la file d'attente a l'ecran repose sur notre hook, qui refuse puis memorise la demande
+    # pour une autorisation ulterieure. On garde donc "default" + hook PreToolUse a echec ferme : toute
+    # decision allow/deny vient de decide(), et setting_sources=[] empeche les regles de l'utilisateur.
+    def _options(self, api_key: str) -> ClaudeAgentOptions:
         # Le hook doit durer plus longtemps que la question vocale, sinon les deux se courent apres.
         hook = HookMatcher(hooks=[self._pre_tool_use], timeout=self._ask_timeout + 30)  # pyright: ignore[reportArgumentType]
         return ClaudeAgentOptions(
             cwd=self._project,
-            env=build_env(),
+            env={"ANTHROPIC_API_KEY": api_key},  # le SDK fusionne options.env par-dessus os.environ
             resume=self._session_id,
             permission_mode="default",
+            max_turns=self._max_turns,
+            max_budget_usd=self._max_budget_usd,
             # Aucune regle utilisateur/projet ne peut autoriser un outil a notre place ;
             # en contrepartie, le CLAUDE.md et les skills de l'utilisateur ne sont pas charges.
             setting_sources=[],
-            system_prompt={"type": "preset", "preset": "claude_code"},
+            system_prompt={"type": "preset", "preset": "claude_code"},  # identifiant technique, non visible
             can_use_tool=self._can_use_tool,
             hooks={"PreToolUse": [hook]},
         )
 
+    async def _converse(self, api_key: str, prompt: str) -> None:
+        async with self._factory(self._options(api_key)) as client:
+            self._client = client
+            await client.query(prompt)
+            async for message in client.receive_response():
+                self._handle(message)
+
     async def _run(self, prompt: str) -> None:
         """A appeler sous `_run_lock`."""
-        scrub_environ()
+        api_key = self._api_key_provider()
+        if not api_key:
+            self._emit(SessionEvent("error", "Claude Agent est désactivé : aucune clé API Anthropic."))
+            self._emit(SessionEvent("done", ""))
+            return
         granted = list(self._approved)  # approbations valables pour cette execution
+        self._stopped = False
+        task = self._task = asyncio.create_task(self._converse(api_key, prompt))
         try:
-            async with self._factory(self._options()) as client:
-                await client.query(prompt)
-                async for message in client.receive_response():
-                    self._handle(message)
-        except Exception as exc:  # limite d'usage, processus mort, connexion expiree...
-            self._emit(SessionEvent("error", str(exc) or type(exc).__name__))
+            await asyncio.wait({task}, timeout=self._max_duration)
+            if not task.done():
+                task.cancel()
+                await asyncio.wait({task}, timeout=1.0)
+                self._emit(SessionEvent("error", "Claude Agent : durée maximale atteinte, session interrompue."))
+            elif task.cancelled():
+                if not self._stopped:
+                    self._emit(SessionEvent("error", "Claude Agent : session annulée."))
+            elif (exc := task.exception()) is not None:  # limite d'usage, processus mort, cle refusee...
+                self._emit(SessionEvent("error", str(exc) or type(exc).__name__))
         finally:
+            if not task.done():  # l'appelant est annule : la session ne doit pas continuer sans lui
+                task.cancel()
+            self._task, self._client = None, None
             # Une approbation ne vaut que pour l'execution qui l'a suivie ; celles donnees
             # pendant celle-ci (execution suivante en file) sont conservees.
             self._approved[:] = [a for a in self._approved if not any(a is g for g in granted)]
@@ -239,11 +298,20 @@ class ClaudeRunner:
         except Exception:  # TimeoutError compris ; CancelledError n'est pas une Exception
             return Reply.NONE
 
+    def _log_decision(self, input_data, decision: str, origin: str) -> None:
+        """Journal d'audit ; ne doit jamais faire echouer la politique."""
+        try:
+            tool, tool_input = input_data["tool_name"], input_data.get("tool_input") or {}
+            self._audit.record(self._session_id, tool, tool_input, decision, origin)
+        except Exception:
+            log.exception("journal d'audit Claude impossible")
+
     async def _pre_tool_use(self, input_data, tool_use_id, context) -> dict:
         try:
             return await self._decide_tool(input_data)
         except Exception as exc:  # echec ferme : dans le doute, l'outil ne tourne pas
             self._emit(SessionEvent("error", f"Erreur de la politique : {exc}"))
+            self._log_decision(input_data, "deny", "policy")
             return _verdict("deny", "Erreur interne de Dr Vocal.")
 
     async def _decide_tool(self, input_data) -> dict:
@@ -251,25 +319,34 @@ class ClaudeRunner:
         if tool == _QUESTION_TOOL:
             return _verdict("ask", "question")  # la reponse passe par can_use_tool
         if self._project is None:  # aucun outil sans projet ouvert
+            self._log_decision(input_data, "deny", "policy")
             return _verdict("deny", "Aucun projet ouvert.")
         decision = decide(tool, tool_input, self._project)
         if decision is Decision.ALLOW:
+            self._log_decision(input_data, "allow", "policy")
             return _verdict("allow")
         if decision is Decision.DENY:
+            self._log_decision(input_data, "deny", "policy")
             return _verdict("deny", "Action interdite par la politique de Dr Vocal.")
         if (tool, tool_input) in self._approved:
             self._approved.remove((tool, tool_input))
+            self._log_decision(input_data, "allow", "approbation")
             return _verdict("allow")
         summary = _summary(tool, tool_input)
-        if not _fits_voice(summary):
+        # Approbation vocale seulement pour les outils a faible risque dont le resume se lit fidelement.
+        if tool not in VOICE_APPROVABLE_TOOLS or not _fits_voice(summary):
             self._add_pending(_Pending(summary, tool, tool_input, screen_only=True))
-            return _verdict("deny", "Action trop longue pour une autorisation vocale ; en attente sur le deuxième écran.")
+            self._log_decision(input_data, "ask", "ecran")
+            return _verdict("deny", "Action à autoriser sur le deuxième écran ; en attente.")
         reply = await self._ask(f"{summary}. Dis oui docteur pour autoriser.", "approval")
         if reply is Reply.APPROVE:
+            self._log_decision(input_data, "allow", "vocal")
             return _verdict("allow")
         if reply is Reply.REJECT:
+            self._log_decision(input_data, "deny", "vocal")
             return _verdict("deny", "L'utilisateur a refusé.")
         self._add_pending(_Pending(summary, tool, tool_input))
+        self._log_decision(input_data, "ask", "vocal")
         return _verdict("deny", "Pas de réponse de l'utilisateur ; l'action est en attente d'autorisation.")
 
     async def _can_use_tool(self, tool, tool_input, context):

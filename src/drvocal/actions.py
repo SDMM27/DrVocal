@@ -20,6 +20,7 @@ ACTION_NAMES = frozenset({
     "notes.start",
     "claude.prompt",
     "claude.continue",
+    "claude.stop",
 })
 
 

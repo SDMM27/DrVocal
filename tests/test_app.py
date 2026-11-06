@@ -328,6 +328,7 @@ async def test_approval_requires_exact_phrase(said, expected):
 
 class FakeRunner:
     def __init__(self):
+        self.stopped = 0
         self.started: list[tuple] = []
         self.resumed: list[str] = []
 
@@ -337,10 +338,13 @@ class FakeRunner:
     async def resume(self, prompt):
         self.resumed.append(prompt)
 
+    async def stop(self):
+        self.stopped += 1
+
 
 async def test_unknown_project_starts_nothing(settings):
     catalogue, runner = Catalogue(), FakeRunner()
-    register_claude(catalogue, runner, settings)
+    register_claude(catalogue, runner, settings, lambda: "sk-test", lambda p: None)
     out = await catalogue.run(Intent("claude.prompt", {"project": "inconnu", "prompt": "fais x"}))
     await asyncio.sleep(0.01)
     assert out.ok is False and runner.started == []
@@ -348,7 +352,7 @@ async def test_unknown_project_starts_nothing(settings):
 
 async def test_claude_prompt_and_continue_run_in_background(settings):
     catalogue, runner = Catalogue(), FakeRunner()
-    register_claude(catalogue, runner, settings)
+    register_claude(catalogue, runner, settings, lambda: "sk-test", lambda p: None)
     out = await catalogue.run(Intent("claude.prompt", {"project": "mon site", "prompt": "fais x"}))
     assert out.ok is True
     out = await catalogue.run(Intent("claude.continue", {"prompt": "encore"}))
@@ -356,6 +360,38 @@ async def test_claude_prompt_and_continue_run_in_background(settings):
     await asyncio.sleep(0.01)
     assert runner.started == [(Path("D:/site"), "fais x")]
     assert runner.resumed == ["encore"]
+
+
+async def test_claude_stop_interrupts_the_runner(settings):
+    catalogue, runner = Catalogue(), FakeRunner()
+    register_claude(catalogue, runner, settings, lambda: "sk-test", lambda p: None)
+    out = await catalogue.run(Intent("claude.stop", {}))
+    assert out.ok is True and runner.stopped == 1
+
+
+async def test_claude_not_registered_without_api_key(settings, caplog):
+    import logging
+
+    catalogue, runner = Catalogue(), FakeRunner()
+    with caplog.at_level(logging.INFO):
+        register_claude(catalogue, runner, settings, lambda: None, lambda p: None)
+    for action in ("claude.prompt", "claude.continue", "claude.stop"):
+        out = await catalogue.run(Intent(action, {"project": "mon site", "prompt": "x"}))
+        assert out.ok is False
+    assert "Claude Agent désactivé (aucune clé API)" in caplog.text
+    assert runner.started == [] and runner.resumed == [] and runner.stopped == 0
+
+
+async def test_refused_projects_are_ignored_with_a_warning(settings, caplog):
+    catalogue, runner = Catalogue(), FakeRunner()
+    refuse = lambda p: "trop sensible" if p == Path("D:/site") else None  # noqa: E731
+    register_claude(catalogue, runner, settings, lambda: "sk-test", refuse)
+    out = await catalogue.run(Intent("claude.prompt", {"project": "mon site", "prompt": "x"}))
+    await asyncio.sleep(0.01)
+    assert out.ok is False and runner.started == []
+    assert "mon site" in caplog.text
+    out = await catalogue.run(Intent("claude.prompt", {"project": "dr vocal", "prompt": "x"}))
+    assert out.ok is True
 
 
 async def test_note_uses_long_silence(tmp_path):

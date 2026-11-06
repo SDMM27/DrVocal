@@ -1,4 +1,4 @@
-"""Fenetre du deuxieme ecran : progression de Claude Code, sans jamais prendre le focus.
+"""Fenetre du deuxieme ecran : progression de Claude Agent, sans jamais prendre le focus.
 
 Tout le texte des evenements vient de Claude ou de commandes : il est donc non fiable.
 Il est echappe cote Python et transmis a la page en JSON, jamais concatene dans du JS.

@@ -27,6 +27,10 @@ from drvocal.intent import Intent, parse
     ("demande à claude sur dr vocal de corriger le test", "claude.prompt",
      {"project": "dr vocal", "prompt": "corriger le test"}),
     ("continue avec claude de ajouter un test", "claude.continue", {"prompt": "ajouter un test"}),
+    ("arrête Claude", "claude.stop", {}),
+    ("Stop Claude.", "claude.stop", {}),
+    ("arrête la session Claude", "claude.stop", {}),
+    ("arrête la session de Claude", "claude.stop", {}),
     ("Mets Daft Punk !", "spotify.play", {"query": "Daft Punk"}),
     ("mets ferme discord", "spotify.play", {"query": "ferme discord"}),
 ])

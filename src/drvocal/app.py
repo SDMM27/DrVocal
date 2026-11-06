@@ -19,8 +19,8 @@ from drvocal.actions_notes import save_note
 from drvocal.audio.mic import FRAME_MS, SAMPLE_RATE
 from drvocal.audio.vad import capture_utterance
 from drvocal.audio.wake import WakeEngine
-from drvocal.claude_policy import Reply, parse_reply
-from drvocal.claude_session import ClaudeRunner, SessionEvent
+from drvocal.claude_policy import Reply, parse_reply, validate_project_root
+from drvocal.claude_session import ClaudeRunner, SessionEvent, env_api_key
 from drvocal.config import Settings
 from drvocal.intent import Intent
 
@@ -294,7 +294,24 @@ def register_notes(
     catalogue.register("notes.start", start)
 
 
-def register_claude(catalogue: Catalogue, runner: ClaudeRunner, settings: Settings) -> None:
+def register_claude(
+    catalogue: Catalogue,
+    runner: ClaudeRunner,
+    settings: Settings,
+    api_key_provider: Callable[[], str | None] = env_api_key,
+    validate_project: Callable[[Path], str | None] = validate_project_root,
+) -> None:
+    """Fonction facultative : sans cle API Anthropic au demarrage, aucune action Claude n'est enregistree."""
+    if not api_key_provider():
+        log.info("Claude Agent désactivé (aucune clé API)")
+        return
+    projects: dict[str, Path] = {}
+    for name, path in settings.projects.items():
+        reason = validate_project(path)
+        if reason:
+            log.warning("projet Claude %r ignoré : %s", name, reason)
+        else:
+            projects[name] = path
     tasks: set[asyncio.Task] = set()
 
     def background(coro: Coroutine[Any, Any, None]) -> None:
@@ -309,7 +326,7 @@ def register_claude(catalogue: Catalogue, runner: ClaudeRunner, settings: Settin
         task.add_done_callback(tasks.discard)
 
     async def prompt(intent: Intent) -> Outcome:
-        path = settings.projects.get(intent.args.get("project", "").strip().lower())
+        path = projects.get(intent.args.get("project", "").strip().lower())
         if path is None:
             return Outcome(False)
         background(runner.start(path, intent.args["prompt"]))
@@ -319,8 +336,13 @@ def register_claude(catalogue: Catalogue, runner: ClaudeRunner, settings: Settin
         background(runner.resume(intent.args["prompt"]))
         return Outcome(True)
 
+    async def stop(_: Intent) -> Outcome:
+        await runner.stop()
+        return Outcome(True)
+
     catalogue.register("claude.prompt", prompt)
     catalogue.register("claude.continue", proceed)
+    catalogue.register("claude.stop", stop)
 
 
 def make_ask_user(ears: Ears, speaker: Any, timings: Timings) -> Callable[[str, str], Awaitable[Reply | str]]:

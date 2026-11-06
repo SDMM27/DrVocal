@@ -214,3 +214,72 @@ def test_harmless_lookalikes_only_ask(cmd):
 ])
 def test_parse_reply(text, reply):
     assert parse_reply(text) is reply
+
+
+# --- lot L1 ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", [
+    "package.json", "package-lock.json", "pyproject.toml", "setup.py", "setup.cfg", "Makefile", "CMakeLists.txt",
+    "run.ps1", "mod.psm1", "go.bat", "go.cmd", "x.vbs", "install.sh", "conftest.py", "CLAUDE.md", "app.csproj",
+    "app.sln", "Directory.Build.props", "x.targets", ".gitattributes", ".gitmodules", ".env", ".env.local",
+    "tox.ini", "noxfile.py", "justfile", "Dockerfile", "PACKAGE.JSON", "claude.MD", "sub/dir/package.json",
+    ".claude/settings.json", ".github/workflows/ci.yml", ".vscode/tasks.json",
+])
+@pytest.mark.parametrize("tool,key", [("Write", "file_path"), ("Edit", "file_path"), ("MultiEdit", "file_path")])
+def test_executed_files_in_project_ask(tool, key, name):
+    assert decide(tool, {key: f"D:/proj/{name}"}, P) is Decision.ASK
+
+
+@pytest.mark.parametrize("path", [r"D:\proj\sub\..\package.json", "D:/proj/package.json.", "D:/proj/package.json::$DATA"])
+def test_executed_files_deceptive_paths_ask(path):
+    assert decide("Write", {"file_path": path}, P) is Decision.ASK
+
+
+def test_ordinary_files_in_project_still_allowed():
+    assert decide("Write", {"file_path": "D:/proj/src/app.py"}, P) is Decision.ALLOW
+    assert decide("MultiEdit", {"file_path": "D:/proj/README.md"}, P) is Decision.ALLOW
+
+
+def test_voice_approvable_tools_are_low_risk_only():
+    from drvocal.claude_policy import VOICE_APPROVABLE_TOOLS
+
+    assert VOICE_APPROVABLE_TOOLS == {"WebSearch", "WebFetch", "Read", "Glob", "Grep"}
+
+
+ENV = {"APPDATA": "C:/Users/moi/AppData/Roaming", "LOCALAPPDATA": "C:/Users/moi/AppData/Local",
+       "SystemRoot": "C:/Windows", "ProgramFiles": "C:/Program Files"}
+
+
+def check(path, tmp_path, home=None):
+    from drvocal.claude_policy import validate_project_root
+
+    return validate_project_root(path, env=ENV, home=home or Path("C:/Users/moi"))
+
+
+@pytest.mark.parametrize("path", ["C:/", "D:\\", "C:/Users/moi", "C:/Users/moi/AppData/Roaming",
+                                  "C:/Users/moi/AppData/Local", "C:/Windows", "C:/Program Files", "C:/Users",
+                                  "C:/Users/moi/AppData", "C:/Windows/System32"])
+def test_sensitive_project_roots_refused(path, tmp_path):
+    from unittest import mock
+
+    with mock.patch("pathlib.Path.is_dir", return_value=True):
+        assert check(path, tmp_path)
+
+
+def test_real_home_and_missing_and_file_refused(tmp_path):
+    from drvocal.claude_policy import validate_project_root
+
+    assert validate_project_root(Path.home())
+    assert validate_project_root(tmp_path / "absent")
+    f = tmp_path / "f.txt"
+    f.write_text("x")
+    assert validate_project_root(f)
+
+
+def test_normal_project_accepted(tmp_path):
+    from drvocal.claude_policy import validate_project_root
+
+    project = tmp_path / "mon-projet"
+    project.mkdir()
+    assert validate_project_root(project, env=ENV, home=Path("C:/Users/moi")) is None

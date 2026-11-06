@@ -14,9 +14,10 @@ from claude_agent_sdk import (
 )
 
 from drvocal.claude_policy import Reply
-from drvocal.claude_session import ClaudeRunner, SessionEvent, build_env
+from drvocal.claude_session import ClaudeRunner, SessionEvent
 
 P = Path("D:/proj")
+KEY = "sk-test"
 
 
 def result(is_error=False, text="ok", session_id="s1"):
@@ -56,7 +57,11 @@ class Harness:
         self.clients: list[FakeClient] = []
         self.messages, self.error = messages or [result()], error
         self.during = None  # appelee dans la prochaine execution du client, comme un outil de Claude
-        self.runner = ClaudeRunner(self.events.append, self.ask, client_factory=self.factory)
+        self.runner = self.make_runner(self.ask)
+
+    def make_runner(self, ask, **kwargs):
+        kwargs = {"api_key_provider": lambda: KEY, "project_validator": lambda p: None, **kwargs}
+        return ClaudeRunner(self.events.append, ask, client_factory=self.factory, **kwargs)
 
     async def ask(self, summary, kind):
         self.asked.append(summary)
@@ -87,18 +92,11 @@ def runner():
     return Harness()
 
 
-def test_session_env_has_no_api_key(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "y")
-    env = build_env()
-    assert "ANTHROPIC_API_KEY" not in env and "ANTHROPIC_AUTH_TOKEN" not in env
-
-
 async def test_start_uses_project_cwd_and_default_permission_mode(runner):
     await runner.runner.start(P, "salut")
     assert Path(runner.options.cwd) == P
     assert runner.options.permission_mode in (None, "default")
-    assert "ANTHROPIC_API_KEY" not in runner.options.env
+    assert runner.options.env == {"ANTHROPIC_API_KEY": KEY}
     assert runner.clients[0].prompts == ["salut"]
 
 
@@ -158,7 +156,7 @@ async def test_hook_runs_for_subagent_tools_too(runner):
 async def test_hook_asks_with_exact_command_and_allows_on_approve():
     h = Harness(answers=[Reply.APPROVE])
     await h.runner.start(P, "x")
-    out = await h.hook("Bash", {"command": "npm test"})
+    out = await h.hook("WebSearch", {"query": "npm test"})
     assert out["permissionDecision"] == "allow"
     assert "npm test" in h.asked[0]
 
@@ -166,21 +164,21 @@ async def test_hook_asks_with_exact_command_and_allows_on_approve():
 async def test_hook_asks_with_exact_path_outside_project():
     h = Harness(answers=[Reply.APPROVE])
     await h.runner.start(P, "x")
-    await h.hook("Edit", {"file_path": "C:/x.py"})
+    await h.hook("Read", {"file_path": "C:/x.py"})
     assert "C:/x.py" in h.asked[0]
 
 
 async def test_reject_denies_without_pending():
     h = Harness(answers=[Reply.REJECT])
     await h.runner.start(P, "x")
-    out = await h.hook("Bash", {"command": "npm test"})
+    out = await h.hook("WebSearch", {"query": "npm test"})
     assert out["permissionDecision"] == "deny"
     assert "pending" not in h.kinds()
 
 
 async def test_no_reply_keeps_request_pending_and_does_not_run(runner):
     await runner.runner.start(P, "x")
-    out = await runner.hook("Bash", {"command": "npm test"})
+    out = await runner.hook("WebSearch", {"query": "npm test"})
     assert out["permissionDecision"] == "deny"
     pending = [e for e in runner.events if e.kind == "pending"]
     assert len(pending) == 1 and "npm test" in pending[0].text
@@ -193,9 +191,9 @@ async def test_ask_user_timeout_counts_as_no_reply():
     async def slow(summary, kind):
         await asyncio.sleep(5)
 
-    h.runner = ClaudeRunner(h.events.append, slow, client_factory=h.factory, ask_timeout=0.01)
+    h.runner = h.make_runner(slow, ask_timeout=0.01)
     await h.runner.start(P, "x")
-    out = await h.hook("Bash", {"command": "npm test"})
+    out = await h.hook("WebSearch", {"query": "npm test"})
     assert out["permissionDecision"] == "deny"
     assert "pending" in h.kinds()
 
@@ -203,7 +201,7 @@ async def test_ask_user_timeout_counts_as_no_reply():
 async def test_resolve_pending_approve_resumes_session():
     h = Harness()
     await h.runner.start(P, "x")
-    await h.hook("Bash", {"command": "npm test"})
+    await h.hook("WebSearch", {"query": "npm test"})
     pending_id = next(iter(h.runner.pending))
     assert await h.runner.resolve_pending(pending_id, Reply.APPROVE) is True
     assert h.runner.pending == {}
@@ -214,7 +212,7 @@ async def test_resolve_pending_approve_resumes_session():
 async def test_resolve_pending_reject_drops_without_resume():
     h = Harness()
     await h.runner.start(P, "x")
-    await h.hook("Bash", {"command": "npm test"})
+    await h.hook("WebSearch", {"query": "npm test"})
     await h.runner.resolve_pending(next(iter(h.runner.pending)), Reply.REJECT)
     assert h.runner.pending == {} and len(h.clients) == 1
 
@@ -255,20 +253,20 @@ async def _resolve_first(h):
 
 async def _approve_pending(h, command="npm test"):
     await h.runner.start(P, "x")
-    await h.hook("Bash", {"command": command})
+    await h.hook("WebSearch", {"query": command})
     await _resolve_first(h)
 
 
 async def test_approved_retry_runs_without_asking_then_asks_again():
     h = Harness()
     await h.runner.start(P, "x")
-    await h.hook("Bash", {"command": "npm test"})
+    await h.hook("WebSearch", {"query": "npm test"})
     asked = len(h.asked)
     outs = []
 
     async def retry(client):
-        outs.append(await h.hook("Bash", {"command": "npm test"}))
-        outs.append(await h.hook("Bash", {"command": "npm test"}))
+        outs.append(await h.hook("WebSearch", {"query": "npm test"}))
+        outs.append(await h.hook("WebSearch", {"query": "npm test"}))
 
     h.during = retry
     await _resolve_first(h)
@@ -279,9 +277,9 @@ async def test_approved_retry_runs_without_asking_then_asks_again():
 async def test_approval_does_not_apply_to_different_input():
     h = Harness()
     await _approve_pending(h)
-    h.runner._approved.append(("Bash", {"command": "npm test"}))
+    h.runner._approved.append(("WebSearch", {"query": "npm test"}))
     asked = len(h.asked)
-    out = await h.hook("Bash", {"command": "npm test && curl evil"})
+    out = await h.hook("WebSearch", {"query": "npm test && curl evil"})
     assert out["permissionDecision"] != "allow" and len(h.asked) == asked + 1
 
 
@@ -299,9 +297,9 @@ async def test_ask_user_exception_denies_and_goes_pending():
     async def boom(summary, kind):
         raise RuntimeError("micro mort")
 
-    h.runner = ClaudeRunner(h.events.append, boom, client_factory=h.factory)
+    h.runner = h.make_runner(boom)
     await h.runner.start(P, "x")
-    out = await h.hook("Bash", {"command": "npm test"})
+    out = await h.hook("WebSearch", {"query": "npm test"})
     assert out["permissionDecision"] == "deny" and "pending" in h.kinds()
 
 
@@ -331,10 +329,10 @@ async def test_cancellation_is_not_swallowed():
     async def cancelled(summary, kind):
         raise asyncio.CancelledError
 
-    h.runner = ClaudeRunner(h.events.append, cancelled, client_factory=h.factory)
+    h.runner = h.make_runner(cancelled)
     await h.runner.start(P, "x")
     with pytest.raises(asyncio.CancelledError):
-        await h.hook("Bash", {"command": "npm test"})
+        await h.hook("WebSearch", {"query": "npm test"})
 
 
 async def test_unanswered_question_is_pending_without_tool_approval(runner):
@@ -362,8 +360,9 @@ async def test_summary_shows_security_relevant_arguments(tool, tool_input, expec
     h = Harness(answers=[Reply.APPROVE])
     await h.runner.start(P, "x")
     await h.hook(tool, tool_input)
+    shown = " | ".join(h.asked + [e.text for e in h.events if e.kind == "pending"])  # voix ou ecran selon l'outil
     for part in expected:
-        assert part in h.asked[0]
+        assert part in shown
 
 
 async def test_long_command_never_reaches_ask_user_and_is_approved_on_screen_once():
@@ -396,14 +395,14 @@ async def test_multiline_command_is_screen_only():
 async def test_short_command_is_voice_approvable():
     h = Harness(answers=[Reply.APPROVE])
     await h.runner.start(P, "x")
-    assert (await h.hook("Bash", {"command": "npm test"}))["permissionDecision"] == "allow"
+    assert (await h.hook("WebSearch", {"query": "npm test"}))["permissionDecision"] == "allow"
 
 
 async def test_start_clears_pending_and_approvals():
     h = Harness()
     await _approve_pending(h)
-    await h.hook("Bash", {"command": "other"})
-    h.runner._approved.append(("Bash", {"command": "npm test"}))
+    await h.hook("WebSearch", {"query": "other"})
+    h.runner._approved.append(("WebSearch", {"query": "npm test"}))
     assert h.runner.pending
     await h.runner.start(Path("D:/autre"), "y")
     assert h.runner.pending == {} and h.runner._approved == []
@@ -413,59 +412,19 @@ async def test_approval_is_cleared_after_the_resumed_run():
     h = Harness()
     await _approve_pending(h)
     assert h.runner._approved == []
-    out = await h.hook("Bash", {"command": "npm test"})
+    out = await h.hook("WebSearch", {"query": "npm test"})
     assert out["permissionDecision"] == "deny"
 
 
 async def test_pending_text_has_full_input_but_speech_does_not():
     h = Harness()
     await h.runner.start(P, "x")
-    await h.hook("Write", {"file_path": "C:/x.py", "content": "SECRET_CONTENU"})
+    await h.hook("WebFetch", {"url": "https://x.example/a", "prompt": "SECRET_CONTENU"})
     assert "SECRET_CONTENU" in next(e.text for e in h.events if e.kind == "pending")
-    assert "SECRET_CONTENU" not in h.asked[0] and "C:/x.py" in h.asked[0]
+    assert "SECRET_CONTENU" not in h.asked[0] and "https://x.example/a" in h.asked[0]
 
 
 # --- round 3 ---------------------------------------------------------------
-
-
-async def test_environment_of_spawned_process_has_no_api_key(monkeypatch):
-    """On lit l'environnement final tel que le transport du SDK le calcule (os.environ + options.env)."""
-    import os
-    import sys
-
-    import claude_agent_sdk._internal.transport.subprocess_cli as cli
-
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "cle")
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "jeton")
-    monkeypatch.setenv("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK", "1")
-    h = Harness()
-    captured = {}
-
-    async def fake_open_process(cmd, **kwargs):
-        captured["env"] = kwargs["env"]
-        raise RuntimeError("stop")
-
-    monkeypatch.setattr(cli.anyio, "open_process", fake_open_process)
-    await h.runner.start(P, "x")
-    options = h.options
-    options.cli_path = sys.executable
-    transport = cli.SubprocessCLITransport(prompt="x", options=options)
-    with pytest.raises(Exception):
-        await transport.connect()
-    assert "ANTHROPIC_API_KEY" not in captured["env"] and "ANTHROPIC_AUTH_TOKEN" not in captured["env"]
-    assert "ANTHROPIC_API_KEY" not in os.environ
-
-
-async def test_environ_is_scrubbed_before_each_run(monkeypatch):
-    import os
-
-    h = Harness()
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "cle")
-    await h.runner.start(P, "x")
-    assert "ANTHROPIC_API_KEY" not in os.environ
-    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "jeton")
-    await h.runner.resume("y")
-    assert "ANTHROPIC_AUTH_TOKEN" not in os.environ
 
 
 async def test_options_use_no_setting_sources_and_hook_outlives_voice_timeout(runner):
@@ -478,7 +437,7 @@ async def test_options_use_no_setting_sources_and_hook_outlives_voice_timeout(ru
 
 async def test_hook_timeout_follows_ask_timeout():
     h = Harness()
-    h.runner = ClaudeRunner(h.events.append, h.ask, client_factory=h.factory, ask_timeout=5)
+    h.runner = h.make_runner(h.ask, ask_timeout=5)
     await h.runner.start(P, "x")
     assert h.options.hooks["PreToolUse"][0].timeout == 35
 
@@ -495,7 +454,8 @@ async def test_overlapping_runs_are_sequential():
             yield result()
 
     h = Harness()
-    h.runner = ClaudeRunner(h.events.append, h.ask, client_factory=lambda o: SlowClient(o, []))
+    h.runner = ClaudeRunner(h.events.append, h.ask, client_factory=lambda o: SlowClient(o, []),
+                            api_key_provider=lambda: KEY, project_validator=lambda p: None)
     await asyncio.gather(h.runner.start(P, "a"), h.runner.resume("b"), h.runner.resume("c"))
     assert peak[0] == 1
 
@@ -512,9 +472,9 @@ async def test_parallel_asks_are_serialized():
         return Reply.APPROVE
 
     h = Harness()
-    h.runner = ClaudeRunner(h.events.append, ask, client_factory=h.factory)
+    h.runner = h.make_runner(ask)
     await h.runner.start(P, "x")
-    outs = await asyncio.gather(h.hook("Bash", {"command": "a"}), h.hook("Bash", {"command": "b"}))
+    outs = await asyncio.gather(h.hook("WebSearch", {"query": "a"}), h.hook("WebSearch", {"query": "b"}))
     assert peak[0] == 1 and len(order) == 2
     assert all(o["permissionDecision"] == "allow" for o in outs)
 
@@ -525,9 +485,9 @@ async def test_queued_ask_counts_its_wait_in_the_timeout():
         return Reply.APPROVE
 
     h = Harness()
-    h.runner = ClaudeRunner(h.events.append, ask, client_factory=h.factory, ask_timeout=0.05)
+    h.runner = h.make_runner(ask, ask_timeout=0.05)
     await h.runner.start(P, "x")
-    outs = await asyncio.gather(h.hook("Bash", {"command": "a"}), h.hook("Bash", {"command": "b"}))
+    outs = await asyncio.gather(h.hook("WebSearch", {"query": "a"}), h.hook("WebSearch", {"query": "b"}))
     assert [o["permissionDecision"] for o in outs] == ["deny", "deny"]
 
 
@@ -537,10 +497,10 @@ async def test_approval_during_first_run_is_not_lost_and_no_false_done():
     outs, tasks = [], []
 
     async def retry(client):
-        outs.append(await h.hook("Bash", {"command": "npm test"}))
+        outs.append(await h.hook("WebSearch", {"query": "npm test"}))
 
     async def first(client):
-        await h.hook("Bash", {"command": "npm test"})
+        await h.hook("WebSearch", {"query": "npm test"})
         pending_id = next(iter(h.runner.pending))
         tasks.append(asyncio.create_task(h.runner.resolve_pending(pending_id, Reply.APPROVE)))
         await asyncio.sleep(0.01)  # la reprise est en file derriere la premiere execution
@@ -557,7 +517,7 @@ async def test_approval_during_first_run_is_not_lost_and_no_false_done():
 async def test_resolve_pending_stays_pending_when_session_not_resumable():
     h = Harness(messages=[AssistantMessage(content=[], model="m")])
     await h.runner.start(P, "x")
-    await h.hook("Bash", {"command": "npm test"})
+    await h.hook("WebSearch", {"query": "npm test"})
     pending_id = next(iter(h.runner.pending))
     assert await h.runner.resolve_pending(pending_id, Reply.APPROVE) is False
     assert pending_id in h.runner.pending and h.runner._approved == [] and len(h.clients) == 1
@@ -582,7 +542,7 @@ async def test_control_and_format_characters_are_screen_only(command):
 async def test_ask_kinds_are_approval_and_question():
     h = Harness(answers=[Reply.APPROVE, "oui"])
     await h.runner.start(P, "x")
-    await h.hook("Bash", {"command": "npm test"})
+    await h.hook("WebSearch", {"query": "npm test"})
     await h.options.can_use_tool("AskUserQuestion", QUESTION, None)
     assert h.kinds_asked == ["approval", "question"]
 
@@ -607,5 +567,180 @@ async def test_empty_answer_counts_as_no_answer():
 async def test_tool_pending_is_not_a_question():
     h = Harness()
     await h.runner.start(P, "x")
-    await h.hook("Bash", {"command": "npm test"})
+    await h.hook("WebSearch", {"query": "npm test"})
     assert [e.question for e in h.events if e.kind == "pending"] == [False]
+
+
+# --- lot L1 : cle API, approbation limitee, arret, limites, audit -----------
+
+
+async def hang(client):
+    await asyncio.Event().wait()
+
+
+async def test_api_key_comes_from_provider_and_environment_is_not_scrubbed(monkeypatch):
+    import os
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "cle-de-l-environnement")
+    h = Harness()
+    h.runner = h.make_runner(h.ask, api_key_provider=lambda: "sk-fournisseur")
+    await h.runner.start(P, "x")
+    assert h.options.env == {"ANTHROPIC_API_KEY": "sk-fournisseur"}
+    assert os.environ["ANTHROPIC_API_KEY"] == "cle-de-l-environnement"
+
+
+async def test_default_provider_reads_environment(monkeypatch):
+    from drvocal.claude_session import env_api_key
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", " sk-env ")
+    assert env_api_key() == "sk-env"
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    assert env_api_key() is None
+
+
+async def test_no_api_key_means_error_and_no_session():
+    h = Harness()
+    h.runner = h.make_runner(h.ask, api_key_provider=lambda: None)
+    await h.runner.start(P, "x")
+    assert h.clients == [] and h.kinds() == ["error", "done"]
+    assert "clé API" in h.events[0].text
+
+
+async def test_start_refuses_invalid_project():
+    h = Harness()
+    h.runner = ClaudeRunner(h.events.append, h.ask, client_factory=h.factory, api_key_provider=lambda: KEY)
+    await h.runner.start(Path("Z:/n-existe-pas"), "x")
+    assert h.clients == [] and h.kinds() == ["error", "done"]
+
+
+async def test_limits_are_passed_to_sdk(runner):
+    await runner.runner.start(P, "x")
+    assert runner.options.max_turns == 30 and runner.options.max_budget_usd == 2.0
+    h = Harness()
+    h.runner = h.make_runner(h.ask, max_turns=5, max_budget_usd=0.5)
+    await h.runner.start(P, "x")
+    assert h.options.max_turns == 5 and h.options.max_budget_usd == 0.5
+
+
+@pytest.mark.parametrize("tool,tool_input", [
+    ("Bash", {"command": "npm test"}),
+    ("PowerShell", {"command": "Get-Date"}),
+    ("Write", {"file_path": "C:/x.py", "content": "z"}),
+    ("Edit", {"file_path": "D:/proj/package.json"}),
+    ("MultiEdit", {"file_path": "D:/proj/CLAUDE.md"}),
+    ("NotebookEdit", {"notebook_path": "C:/n.ipynb"}),
+])
+async def test_sensitive_tools_never_reach_voice_approval(tool, tool_input):
+    h = Harness(answers=[Reply.APPROVE, Reply.APPROVE])
+    await h.runner.start(P, "x")
+    out = await h.hook(tool, tool_input)
+    assert h.asked == [] and out["permissionDecision"] == "deny"
+    assert [e.kind for e in h.events if e.kind == "pending"] == ["pending"]
+    assert next(iter(h.runner.pending.values())).screen_only is True
+
+
+async def test_low_risk_tools_can_still_be_approved_by_voice():
+    h = Harness(answers=[Reply.APPROVE, Reply.APPROVE])
+    await h.runner.start(P, "x")
+    assert (await h.hook("WebSearch", {"query": "q"}))["permissionDecision"] == "allow"
+    assert (await h.hook("Read", {"file_path": "C:/x.txt"}))["permissionDecision"] == "allow"
+    assert len(h.asked) == 2
+
+
+async def test_stop_interrupts_a_never_ending_session_quickly():
+    h = Harness()
+    h.during = hang  # receive_response ne finit jamais ; le faux client n'a pas d'interrupt
+    task = asyncio.create_task(h.runner.start(P, "x"))
+    while not h.clients:
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+    h.runner._approved.append(("WebSearch", {"query": "q"}))
+    t0 = asyncio.get_running_loop().time()
+    await h.runner.stop()
+    await asyncio.wait_for(task, 2)
+    assert asyncio.get_running_loop().time() - t0 < 2
+    assert h.runner._approved == [] and h.kinds()[-1] == "done"
+    assert "arrêté" in next(e.text for e in h.events if e.kind == "text")
+    assert "error" not in h.kinds()
+
+
+async def test_stop_calls_interrupt_and_survives_a_hanging_interrupt():
+    h = Harness()
+    h.during = hang
+    calls = []
+
+    async def interrupt():
+        calls.append(1)
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(h.runner.start(P, "x"))
+    while not h.clients:
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+    h.clients[0].interrupt = interrupt
+    h.runner._client = h.clients[0]
+    t0 = asyncio.get_running_loop().time()
+    await h.runner.stop()
+    await asyncio.wait_for(task, 2)
+    assert calls == [1] and asyncio.get_running_loop().time() - t0 < 2
+
+
+async def test_stop_without_session_says_so():
+    h = Harness()
+    await h.runner.stop()
+    assert [e.kind for e in h.events] == ["text"]
+
+
+async def test_max_duration_emits_error():
+    h = Harness()
+    h.runner = h.make_runner(h.ask, max_duration=0.05)
+    h.during = hang
+    await asyncio.wait_for(h.runner.start(P, "x"), 2)
+    assert h.kinds() == ["error", "done"] and "durée maximale" in h.events[0].text
+
+
+async def test_caller_cancellation_cancels_the_session():
+    h = Harness()
+    h.during = hang
+    task = asyncio.create_task(h.runner.start(P, "x"))
+    while not h.clients:
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
+    inner = h.runner._task
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0)
+    assert inner is not None and inner.cancelled()
+
+
+async def test_audit_log_has_one_line_per_decision_and_no_content(tmp_path):
+    import json
+
+    audit = tmp_path / "logs" / "audit.jsonl"
+    h = Harness(answers=[Reply.APPROVE])
+    h.runner = h.make_runner(h.ask, audit_path=audit)
+    await h.runner.start(P, "x")
+    long_command = "npm test " + "x" * 200
+    await h.hook("Read", {"file_path": "D:/proj/a.py"})
+    await h.hook("Bash", {"command": "rm -rf /"})
+    await h.hook("Bash", {"command": long_command})
+    await h.hook("WebSearch", {"query": "q"})
+    await h.hook("Write", {"file_path": "D:/proj/package.json", "content": "SECRET_CONTENU"})
+    rows = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
+    assert [(r["tool"], r["decision"], r["origin"]) for r in rows] == [
+        ("Read", "allow", "policy"), ("Bash", "deny", "policy"), ("Bash", "ask", "ecran"),
+        ("WebSearch", "allow", "vocal"), ("Write", "ask", "ecran")]
+    assert rows[2]["target"] == long_command[:60] and rows[4]["target"] == "D:/proj/package.json"
+    assert all(r["session_id"] == "s1" and r["ts"] for r in rows)
+    assert "SECRET_CONTENU" not in audit.read_text(encoding="utf-8")
+
+
+async def test_audit_write_failure_never_breaks_the_policy(tmp_path):
+    h = Harness()
+    h.runner = h.make_runner(h.ask, audit_path=tmp_path)  # un dossier : l'ecriture echoue
+    await h.runner.start(P, "x")
+    out = await h.hook("Read", {"file_path": "D:/proj/a.py"})
+    assert out["permissionDecision"] == "allow"
+    out = await h.hook("Bash", {"command": "rm -rf /"})
+    assert out["permissionDecision"] == "deny"

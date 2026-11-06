@@ -1,6 +1,6 @@
 # Dr Vocal
 
-Assistant vocal local, en français, pour joueur PC sous Windows 11. Il se pilote à la voix pendant une partie, sans alt-tab : Spotify, Discord, prise de notes et sessions Claude Code. Usage personnel, un seul utilisateur.
+Assistant vocal local, en français, pour joueur PC sous Windows 11. Il se pilote à la voix pendant une partie, sans alt-tab : Spotify, Discord, prise de notes et sessions Claude Agent (facultatif). Usage personnel, un seul utilisateur.
 
 La conception complète (objectifs, anti-objectifs, décisions) est dans `docs/superpowers/specs/2026-11-02-dr-vocal-design.md`.
 
@@ -9,9 +9,9 @@ La conception complète (objectifs, anti-objectifs, décisions) est dans `docs/s
 - **Spotify** (compte Premium) : lance un titre, un album, un artiste ou une playlist par son nom ; pause, reprise, suivant, précédent, volume.
 - **Discord** via un bot personnel : écrire un message dans un salon, se déplacer dans un salon vocal, muter un autre membre (mute serveur), se muter ou se mettre en sourdine.
 - **Notes** : le texte dicté est enregistré mot pour mot dans un nouveau fichier `.txt` daté.
-- **Claude Code** : un prompt dicté ouvre une session dans le dossier d'un projet que tu nommes ; la progression s'affiche sur le deuxième écran. Dr Vocal ne parle que si Claude a besoin d'une réponse ou d'une autorisation.
+- **Claude Agent** (facultatif, désactivé par défaut) : un prompt dicté ouvre une session dans le dossier d'un projet que tu nommes ; la progression s'affiche sur le deuxième écran. Dr Vocal ne parle que si Claude a besoin d'une réponse ou d'une autorisation. Powered by Claude.
 
-Tout est local : réveil, détection de fin de phrase, transcription (faster-whisper), compréhension (règles, sans réseau ni modèle de langage) et voix (Piper). Seules les actions Spotify, Discord et Claude Code passent par le réseau, et seulement après un réveil.
+Tout est local : réveil, détection de fin de phrase, transcription (faster-whisper), compréhension (règles, sans réseau ni modèle de langage) et voix (Piper). Seules les actions Spotify, Discord et Claude Agent passent par le réseau, et seulement après un réveil.
 
 ## Ce que Dr Vocal ne fait pas
 
@@ -27,7 +27,7 @@ Tout est local : réveil, détection de fin de phrase, transcription (faster-whi
 
 - Windows 11, Python 3.12 ou plus récent, [uv](https://docs.astral.sh/uv/).
 - Un micro. Le micro est partagé avec Discord : tes amis entendent ce que tu dis à Dr Vocal.
-- Claude Code installé et connecté (abonnement), pour les sessions Claude. Le code retire `ANTHROPIC_API_KEY` et `ANTHROPIC_AUTH_TOKEN` de l'environnement du processus : aucune clé API n'est utilisée, la facturation reste celle de l'abonnement.
+- Facultatif, pour Claude Agent : ta propre clé API Anthropic, fournie par la variable d'environnement `ANTHROPIC_API_KEY` (le stockage chiffré des secrets viendra ensuite). Claude Agent est payant à l'usage, facturé par Anthropic sur ta clé ; il n'utilise aucun abonnement claude.ai. Sans clé, la fonction est désactivée et les commandes Claude n'existent pas. Powered by Claude.
 
 ```powershell
 git clone https://github.com/SDMM27/DrVocal.git
@@ -218,22 +218,23 @@ Les commandes sont analysées par des règles (accents et majuscules ignorés), 
   - « mute Alex », « coupe le micro de Alex », « rends muet Alex » (mute serveur)
 - **Notes**
   - « prends une note », « fais une note », « écris une note » : dicte ensuite ta note ; le silence de fin est plus long (2,5 s). La note est écrite mot pour mot dans `notes_dir`, sous la forme `AAAA-MM-JJ_HH-MM-SS.txt`.
-- **Claude Code**
+- **Claude Agent** (seulement si une clé API est fournie)
   - « demande à Claude sur Dr Vocal de lancer les tests » (prépositions acceptées : `sur`, `dans`, `pour`, `avec`)
   - « continue avec Claude pour ajouter un test » : reprend la session en cours
+  - « arrête Claude », « stop Claude », « arrête la session Claude » : interrompt la session en cours
 - **Synonymes** : tout énoncé entier défini dans `[synonyms]`.
 
 ### Deuxième écran et sessions Claude
 
 Une petite fenêtre, placée sur `second_screen_index` et qui ne prend jamais le focus, affiche la progression de Claude (texte, outils utilisés), les erreurs et les demandes en attente. Elle apparaît quand il y a quelque chose à montrer.
 
-Claude Code tourne en arrière-plan dans le dossier du projet, en mode d'autorisation par défaut (jamais de mode qui contourne les autorisations). Seules les actions suivantes passent sans question :
+Claude Agent tourne en arrière-plan dans le dossier du projet, en mode d'autorisation par défaut (jamais de mode qui contourne les autorisations), avec des limites par session : 30 tours, 2 dollars de budget, 15 minutes. Les dossiers trop sensibles (racine d'un lecteur, dossier personnel, AppData, Windows, Program Files) sont refusés comme projets. Seules les actions suivantes passent sans question :
 
 - lire, chercher et lister des fichiers dans le projet ;
-- créer ou modifier des fichiers dans le projet, hors fichiers et dossiers cachés (`.git`, `.claude`, `.vscode`...) ;
+- créer ou modifier des fichiers dans le projet, hors fichiers et dossiers cachés (`.git`, `.claude`, `.vscode`...) et hors fichiers qui finissent par être exécutés (`package.json`, `pyproject.toml`, `Makefile`, scripts `.ps1`/`.bat`/`.cmd`/`.sh`, `conftest.py`, `CLAUDE.md`, `.github`, `*.csproj`...) ;
 - les listes de tâches internes de Claude.
 
-Les commandes d'un shell demandent toujours une autorisation. Les commandes destructives reconnues (suppressions récursives, formatage, arrêt de processus, `git reset --hard`, etc.) sont refusées d'office, sans question. Ces règles réduisent le risque sans le supprimer. Tout le reste (accès hors du projet, fichiers cachés, outils inconnus) demande une autorisation.
+Les commandes d'un shell demandent toujours une autorisation, qui ne peut se donner que sur le deuxième écran. Seuls les outils à faible risque (recherche et lecture web, lecture hors du projet) s'autorisent à la voix. Les commandes destructives reconnues (suppressions récursives, formatage, arrêt de processus, `git reset --hard`, etc.) sont refusées d'office, sans question. Ces règles réduisent le risque sans le supprimer. Tout le reste (accès hors du projet, fichiers cachés, outils inconnus) demande une autorisation.
 
 **Répondre à Claude.** Quand Claude demande une autorisation, Dr Vocal la lit en résumé puis écoute ta réponse sans mot de réveil (jusqu'à 8 s pour commencer à parler, 15 s au plus). Pour une autorisation, seules deux phrases exactes comptent :
 
@@ -242,7 +243,7 @@ Les commandes d'un shell demandent toujours une autorisation. Les commandes dest
 
 Tout autre énoncé, y compris un simple « oui » adressé à un ami, n'est pas une réponse. Pour une question de Claude, ta réponse est transmise telle que transcrite.
 
-Sans réponse comprise dans les 60 s, ou si le résumé est trop long ou sur plusieurs lignes pour être dit fidèlement, l'action n'est pas exécutée et la demande reste en attente sur le deuxième écran, avec des boutons Autoriser et Refuser à utiliser après la partie. Autoriser une demande en attente relance la session pour que Claude réessaie une seule fois.
+Sans réponse comprise dans les 60 s, ou si l'outil est sensible (commandes, écritures) ou le résumé trop long ou sur plusieurs lignes pour être dit fidèlement, l'action n'est pas exécutée et la demande reste en attente sur le deuxième écran, avec des boutons Autoriser et Refuser à utiliser après la partie. Autoriser une demande en attente relance la session pour que Claude réessaie une seule fois.
 
 ## Journal des commandes et vocabulaire
 

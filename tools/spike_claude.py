@@ -1,7 +1,7 @@
-"""Spike : verifie le pilotage de Claude Code avec la connexion Pro, sans cle API.
+"""Spike : verifie le pilotage de Claude Agent avec la cle API Anthropic (ANTHROPIC_API_KEY).
 
 Lance dans un dossier temporaire vide, avec un prompt minimal. Prouve que :
-- l'authentification passe par l'abonnement (aucune cle dans l'environnement) ;
+- l'authentification passe par la cle API de l'utilisateur (variable d'environnement) ;
 - le hook PreToolUse se declenche pour chaque outil ;
 - une question (AskUserQuestion) remonte jusqu'au callback can_use_tool.
 Usage : uv run python tools/spike_claude.py [--slow-hook]
@@ -37,11 +37,10 @@ PROMPT = (
 
 
 async def main() -> None:
-    # Le SDK fusionne options.env PAR-DESSUS os.environ : omettre une cle de options.env ne
-    # suffit pas, il faut la retirer du processus.
-    for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
-        os.environ.pop(key, None)
-    env = dict(os.environ)
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        sys.exit("ANTHROPIC_API_KEY absente : Claude Agent est facultatif et demande une cle API.")
+    env = {"ANTHROPIC_API_KEY": api_key}
     slow = "--slow-hook" in sys.argv
     tool_results: list[str] = []
     tmp = Path(tempfile.mkdtemp(prefix="drvocal_spike_"))

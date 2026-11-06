@@ -1,14 +1,16 @@
-"""Politique des outils de Claude Code et reponses vocales aux autorisations.
+"""Politique des outils de Claude Agent et reponses vocales aux autorisations.
 
 Ces regles reduisent le risque sans le supprimer : une commande autorisee peut
 agir au-dela de ce que les motifs reconnaissent. C'est pourquoi toute commande
 demande une autorisation, et jamais l'inverse.
 """
 import enum
+import fnmatch
 import ntpath
 import os
 import re
 import unicodedata
+from collections.abc import Mapping
 from pathlib import Path
 
 
@@ -25,10 +27,24 @@ class Reply(enum.Enum):
 
 
 _READ_TOOLS = {"Read": "file_path", "Glob": "path", "Grep": "path"}
-_WRITE_TOOLS = {"Edit": "file_path", "Write": "file_path", "NotebookEdit": "notebook_path"}
+_WRITE_TOOLS = {"Edit": "file_path", "Write": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
 _COMMAND_TOOLS = {"Bash", "PowerShell"}
 # Liste de taches interne a Claude : sans effet externe, ne merite pas d'interrompre la partie.
 _INTERNAL_TOOLS = {"TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "ToolSearch"}
+
+# Seuls ces outils peuvent etre autorises a la voix (« oui docteur ») : faible risque, resume fidele.
+# Tout le reste (Bash, PowerShell, ecritures, sous-agents, outils MCP...) passe par l'ecran.
+VOICE_APPROVABLE_TOOLS = frozenset({"WebSearch", "WebFetch", "Read", "Glob", "Grep"})
+
+# Fichiers qui finissent par etre executes (build, hooks, CI, scripts) : les modifier demande un accord.
+_EXECUTED_NAMES = frozenset({
+    "package.json", "package-lock.json", "pyproject.toml", "setup.py", "setup.cfg", "makefile", "cmakelists.txt",
+    "conftest.py", "claude.md", ".gitattributes", ".gitmodules", "tox.ini", "noxfile.py", "justfile", "dockerfile",
+})
+_EXECUTED_PATTERNS = (
+    "*.ps1", "*.psm1", "*.bat", "*.cmd", "*.vbs", "*.sh", "*.csproj", "*.sln", "*.props", "*.targets", ".env*",
+)
+_EXECUTED_DIRS = frozenset({".claude", ".github", ".vscode"})
 
 _DESTRUCTIVE = re.compile(
     r"""
@@ -88,6 +104,17 @@ def _touches_execution_config(relative: str) -> bool:
     return any(part.startswith(".") for part in relative.split("\\") if part != ".")
 
 
+def _is_executed_file(relative: str) -> bool:
+    """Chemin relatif (separateur antislash) vers un fichier de build, de script ou de configuration executee."""
+    parts = [p.casefold() for p in relative.split("\\") if p and p != "."]
+    if not parts:
+        return False
+    if any(p in _EXECUTED_DIRS for p in parts[:-1]):
+        return True
+    name = parts[-1]
+    return name in _EXECUTED_NAMES or any(fnmatch.fnmatchcase(name, pat) for pat in _EXECUTED_PATTERNS)
+
+
 def decide(tool: str, tool_input: dict, project: Path) -> Decision:
     """Decide du sort d'un outil ; tout ce qui n'est pas reconnu demande une autorisation."""
     if tool in _INTERNAL_TOOLS:
@@ -107,11 +134,52 @@ def decide(tool: str, tool_input: dict, project: Path) -> Decision:
     if tool in _WRITE_TOOLS:
         path = tool_input.get(_WRITE_TOOLS[tool])
         relative = _within_project(path, project) if path else None
-        if relative is None or _touches_execution_config(relative):
+        if relative is None or _touches_execution_config(relative) or _is_executed_file(relative):
             return Decision.ASK
         return Decision.ALLOW
 
     return Decision.ASK
+
+
+def _comparable(path: str | Path) -> str:
+    return ntpath.normcase(os.path.realpath(ntpath.normpath(str(path))))
+
+
+def _is_or_contains(candidate: str, protected: str) -> bool:
+    """Vrai si `candidate` est `protected` ou un de ses ancetres."""
+    candidate, protected = candidate.rstrip("\\"), protected.rstrip("\\")
+    return protected == candidate or protected.startswith(candidate + "\\")
+
+
+def validate_project_root(
+    path: str | Path, env: Mapping[str, str] | None = None, home: Path | None = None
+) -> str | None:
+    """Raison du refus d'un dossier de projet, ou None s'il est acceptable.
+
+    Refuse un dossier inexistant, une racine de lecteur, le dossier personnel, AppData,
+    Windows, Program Files et tout dossier qui contient l'un d'eux. `env` et `home` sont
+    injectables pour les tests."""
+    env = os.environ if env is None else env
+    home = Path.home() if home is None else home
+    p = Path(path)
+    if not p.is_dir():
+        return f"Le dossier du projet n'existe pas : {path}"
+    here = _comparable(p)
+    if not ntpath.splitdrive(here)[1].strip("\\/"):
+        return f"Un lecteur entier ne peut pas être un projet : {path}"
+    protected = [str(home)]
+    protected += [env[k] for k in ("APPDATA", "LOCALAPPDATA") if env.get(k)]
+    # Dossiers systeme : eux-memes, leurs ancetres, et tout ce qu'ils contiennent.
+    system = [env[k] for k in ("SystemRoot", "windir", "ProgramFiles", "ProgramFiles(x86)") if env.get(k)]
+    system += [r"C:\Windows", r"C:\Program Files", r"C:\Program Files (x86)"]
+    for prot in protected + system:
+        if _is_or_contains(here, _comparable(prot)):
+            return f"Dossier de projet trop sensible : {path}"
+    for prot in system:
+        root = _comparable(prot).rstrip("\\")
+        if here.startswith(root + "\\"):
+            return f"Dossier de projet dans un dossier système : {path}"
+    return None
 
 
 def parse_reply(text: str) -> Reply:
