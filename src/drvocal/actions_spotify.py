@@ -3,6 +3,7 @@
 # pyright: reportOptionalSubscript=false, reportOptionalMemberAccess=false
 import asyncio
 import difflib
+import json
 import logging
 import os
 import socket
@@ -11,11 +12,10 @@ import time
 import unicodedata
 from collections.abc import Callable
 from functools import lru_cache
-from pathlib import Path
 
 import spotipy
 from spotipy import SpotifyException
-from spotipy.cache_handler import CacheFileHandler
+from spotipy.cache_handler import CacheHandler
 from spotipy.oauth2 import SpotifyPKCE
 
 from drvocal.actions import Catalogue, Outcome
@@ -53,14 +53,37 @@ class NoDevice(Exception):
     pass
 
 
-def build_client(client_id: str, cache_path: Path) -> spotipy.Spotify:
-    """Client PKCE ; le jeton est garde dans `cache_path` (a placer hors du depot)."""
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
+class SecretStoreCacheHandler(CacheHandler):
+    """Jeton spotipy garde chiffre dans le SecretStore (nom `spotify_token`), jamais dans un fichier clair."""
+
+    def __init__(self, store):
+        self.store = store
+
+    def get_cached_token(self) -> dict | None:
+        raw = self.store.get("spotify_token")
+        if not raw:
+            return None
+        try:
+            token = json.loads(raw)
+        except ValueError:
+            log.warning("jeton Spotify illisible, nouvelle autorisation necessaire")
+            return None
+        return token if isinstance(token, dict) else None
+
+    def save_token_to_cache(self, token_info: dict) -> None:
+        try:
+            self.store.set("spotify_token", json.dumps(token_info))
+        except OSError as exc:
+            log.warning("jeton Spotify non enregistre (%s)", type(exc).__name__)
+
+
+def build_client(client_id: str, cache_handler: CacheHandler) -> spotipy.Spotify:
+    """Client PKCE ; le jeton est garde par `cache_handler` (SecretStoreCacheHandler en production)."""
     auth = SpotifyPKCE(
         client_id=client_id,
         redirect_uri=REDIRECT_URI,
         scope=SCOPES,
-        cache_handler=CacheFileHandler(cache_path=str(cache_path)),
+        cache_handler=cache_handler,
     )
     return spotipy.Spotify(auth_manager=auth)
 

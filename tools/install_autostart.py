@@ -3,7 +3,7 @@
     uv run python tools/install_autostart.py            # installe
     uv run python tools/install_autostart.py --remove   # retire
 
-pythonw.exe : pas de console. Le journal est dans drvocal.log dans le dossier LOCALAPPDATA/DrVocal.
+pythonw.exe : pas de console. Le journal est dans LOCALAPPDATA/DrVocal/logs/drvocal.log.
 """
 from __future__ import annotations
 

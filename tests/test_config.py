@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from drvocal.config import ConfigError, load_settings
+from drvocal.config import ConfigError, load_settings, migrate_config
+from drvocal.storage import documents_dir
 
 
 def write_config(tmp_path: Path, content: str) -> Path:
@@ -17,7 +18,7 @@ def empty_config(tmp_path: Path) -> Path:
 
 def test_defaults_notes_dir_to_documents_notes(tmp_path):
     s = load_settings(write_config(tmp_path, ""))
-    assert s.notes_dir == Path.home() / "Documents" / "NOTES"
+    assert s.notes_dir == documents_dir() / "NOTES"
 
 
 def test_default_wake_phrases(tmp_path):
@@ -42,16 +43,37 @@ def test_scalar_defaults(tmp_path):
     assert s.discord_channels == {} and s.discord_members == {}
 
 
-def test_secrets_are_loaded(tmp_path):
-    secrets = tmp_path / "secrets.toml"
-    secrets.write_text('spotify_client_id = "abc"\ndiscord_bot_token = "tok"\n', encoding="utf-8")
-    s = load_settings(empty_config(tmp_path), secrets)
+class FakeStore(dict):
+    def get(self, name, default=None):
+        return super().get(name, default)
+
+
+def test_secrets_are_loaded_from_store(tmp_path):
+    s = load_settings(empty_config(tmp_path), FakeStore(spotify_client_id="abc", discord_bot_token="tok"))
     assert (s.spotify_client_id, s.discord_bot_token) == ("abc", "tok")
 
 
-def test_missing_secrets_file_is_fine(tmp_path):
-    s = load_settings(empty_config(tmp_path), tmp_path / "absent.toml")
-    assert s.discord_bot_token == ""
+def test_missing_secrets_are_empty(tmp_path):
+    s = load_settings(empty_config(tmp_path), FakeStore())
+    assert s.discord_bot_token == "" and s.spotify_client_id == ""
+
+
+def test_missing_config_with_missing_ok_gives_defaults(tmp_path):
+    assert load_settings(tmp_path / "absent.toml", missing_ok=True).wake_mode == "key"
+
+
+def test_migrate_config_0_to_1():
+    assert migrate_config({"wake_mode": "key"}) == {"wake_mode": "key", "schema_version": 1}
+    assert migrate_config({"schema_version": 1}) == {"schema_version": 1}
+
+
+def test_future_schema_version_is_refused(tmp_path):
+    with pytest.raises(ConfigError, match="version"):
+        migrate_config({"schema_version": 99})
+    with pytest.raises(ConfigError):
+        load_settings(write_config(tmp_path, "schema_version = 99"))
+    with pytest.raises(ConfigError):
+        migrate_config({"schema_version": "un"})
 
 
 def test_discord_sections_are_loaded(tmp_path):

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import wave
 from pathlib import Path
@@ -23,12 +22,12 @@ import train_wake  # noqa: E402,F401  (met src/ dans sys.path)
 from drvocal.__main__ import load_config  # noqa: E402
 from drvocal.audio.stt import Transcriber  # noqa: E402
 from drvocal.intent import parse  # noqa: E402
+from drvocal.storage import data_dir  # noqa: E402
 from drvocal.vocabulary import make_hotwords  # noqa: E402
 
 
 def default_dir() -> Path:
-    base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-    return base / "DrVocal" / "commands"
+    return data_dir() / "commands"
 
 
 def read_entries(directory: Path) -> list[dict]:

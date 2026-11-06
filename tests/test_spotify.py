@@ -6,6 +6,7 @@ from spotipy import SpotifyException
 from drvocal.actions import Catalogue
 from drvocal.actions_spotify import register_spotify
 from drvocal.intent import Intent
+from drvocal.secrets_store import SecretStore
 
 NO_DEVICE = SpotifyException(404, -1, "NO_ACTIVE_DEVICE")
 
@@ -211,7 +212,7 @@ def test_build_client_uses_pkce_with_library_scopes(tmp_path, monkeypatch):
     from drvocal import actions_spotify as mod
     seen = {}
     monkeypatch.setattr(mod.spotipy, "Spotify", lambda auth_manager: seen.update(am=auth_manager))
-    mod.build_client("cid", tmp_path / "tok" / "cache.json")
+    mod.build_client("cid", mod.SecretStoreCacheHandler(SecretStore(tmp_path / "tok")))
     am = seen["am"]
     assert am.client_id == "cid"
     assert set(am.scope.split()) == {
@@ -219,6 +220,22 @@ def test_build_client_uses_pkce_with_library_scopes(tmp_path, monkeypatch):
         "user-follow-read", "user-top-read", "playlist-read-private",
         "user-library-read", "user-read-recently-played"}
     assert am.redirect_uri == mod.REDIRECT_URI
+
+
+def test_cache_handler_roundtrips_token_in_secret_store(tmp_path):
+    from drvocal import actions_spotify as mod
+    handler = mod.SecretStoreCacheHandler(SecretStore(tmp_path))
+    assert handler.get_cached_token() is None
+    handler.save_token_to_cache({"access_token": "ACCES-SECRET", "refresh_token": "R"})
+    assert handler.get_cached_token() == {"access_token": "ACCES-SECRET", "refresh_token": "R"}
+    assert b"ACCES-SECRET" not in b"".join(p.read_bytes() for p in tmp_path.iterdir())
+
+
+def test_cache_handler_ignores_garbage_token(tmp_path):
+    from drvocal import actions_spotify as mod
+    store = SecretStore(tmp_path)
+    store.set("spotify_token", "pas du json")
+    assert mod.SecretStoreCacheHandler(store).get_cached_token() is None
 
 
 def _library(client, followed=(), top=(), playlists=()):

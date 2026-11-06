@@ -1,9 +1,13 @@
-"""Chargement des reglages (config.toml) et des secrets (secrets.toml)."""
+"""Chargement des reglages (config.toml) ; les secrets viennent du SecretStore."""
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from drvocal.secrets_store import SecretStore
+from drvocal.storage import documents_dir
+
 DEFAULT_WAKE_PHRASES = ["salut doc vocal"]
+SCHEMA_VERSION = 1
 
 
 class ConfigError(Exception):
@@ -28,9 +32,9 @@ class Settings:
     discord_owner_id: int = 0
     wake_mode: str = "key"  # "voice" ou "key" : touche tant que le modele vocal n'est pas valide
     push_to_talk_key: str = "mouse5"
-    wake_models_dir: Path = Path("models/wake")  # relatif a la racine du projet (resolu par l'app)
+    wake_models_dir: Path = Path("models/wake")  # relatif a data_dir() (resolu par l'app)
     wake_threshold: float = 0.9
-    tts_voice: Path = Path("models/piper/fr_FR-siwis-medium.onnx")  # idem, relatif a la racine
+    tts_voice: Path = Path("models/piper/fr_FR-siwis-medium.onnx")  # idem, relatif a data_dir()
     sounds: dict[str, Path] = field(default_factory=dict)
     command_log: bool = True
     stt_hotwords: bool = True
@@ -59,11 +63,36 @@ def _read_toml(path: Path) -> dict:
         raise ConfigError(f"TOML invalide dans {path} : {e}") from e
 
 
-def load_settings(config_path: Path, secrets_path: Path | None = None) -> Settings:
-    data = _read_toml(config_path)
-    secrets: dict = {}
-    if secrets_path is not None and secrets_path.exists():
-        secrets = _read_toml(secrets_path)
+def _migrate_0_to_1(data: dict) -> dict:
+    return {**data, "schema_version": 1}
+
+
+MIGRATIONS = {0: _migrate_0_to_1}  # version de depart -> fonction qui produit la suivante
+
+
+def migrate_config(data: dict) -> dict:
+    """Fait passer une config lue a la version courante, pas a pas ; version future : ConfigError."""
+    version = data.get("schema_version", 0)
+    if isinstance(version, bool) or not isinstance(version, int) or version < 0:
+        raise ConfigError(f"schema_version invalide : {version!r}")
+    if version > SCHEMA_VERSION:
+        raise ConfigError(f"config.toml est en version {version}, ce Dr Vocal ne comprend que jusqu'a la version "
+                          f"{SCHEMA_VERSION} : mettez Dr Vocal a jour")
+    while version < SCHEMA_VERSION:
+        data = MIGRATIONS[version](data)
+        version += 1
+    return data
+
+
+def load_settings(config_path: Path, store: SecretStore | None = None, *, missing_ok: bool = False) -> Settings:
+    if missing_ok and not config_path.exists():
+        data: dict = {}
+    else:
+        data = _read_toml(config_path)
+    data = migrate_config(data)
+
+    def secret(name: str) -> str:
+        return (store.get(name) if store is not None else None) or ""
 
     from drvocal.audio.push_to_talk import resolve_key  # import tardif : evite un cycle avec actions_hotkeys
 
@@ -77,13 +106,13 @@ def load_settings(config_path: Path, secrets_path: Path | None = None) -> Settin
             raise ValueError(f"push_to_talk_key inconnue : {key!r}")
         return Settings(
             wake_phrases=[str(p).strip().lower() for p in data.get("wake_phrases", DEFAULT_WAKE_PHRASES)],
-            notes_dir=Path(data.get("notes_dir", Path.home() / "Documents" / "NOTES")),
+            notes_dir=Path(data.get("notes_dir", documents_dir() / "NOTES")),
             projects={str(k).strip().lower(): Path(v) for k, v in data.get("projects", {}).items()},
             discord_hotkeys={str(k): str(v) for k, v in discord.get("hotkeys", {}).items()},
             discord_channels={str(k): int(v) for k, v in discord.get("channels", {}).items()},
             discord_members={str(k): int(v) for k, v in discord.get("members", {}).items()},
-            spotify_client_id=str(secrets.get("spotify_client_id", "")),
-            discord_bot_token=str(secrets.get("discord_bot_token", "")),
+            spotify_client_id=secret("spotify_client_id") or str(data.get("spotify_client_id", "")),
+            discord_bot_token=secret("discord_bot_token"),
             stt_model=str(data.get("stt_model", "small")),
             stt_device=str(data.get("stt_device", "cpu")),
             second_screen_index=int(data.get("second_screen_index", 1)),

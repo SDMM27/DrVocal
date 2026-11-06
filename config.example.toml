@@ -1,5 +1,10 @@
-# Copier ce fichier en config.toml (ignore par git) et l'adapter.
-# Les secrets vont dans secrets.toml (ignore par git) : spotify_client_id, discord_bot_token.
+# Copier ce fichier en %APPDATA%\DrVocal\config.toml et l'adapter.
+# Les secrets (spotify_client_id, jeton Discord, jeton Spotify) ne vont plus dans un fichier : ils sont
+# chiffres (DPAPI) dans %LOCALAPPDATA%\DrVocal\secrets. Un ancien secrets.toml ou .spotify-cache a la racine
+# du depot est importe automatiquement au premier lancement, puis supprime.
+
+# Version du format de ce fichier (migree automatiquement).
+schema_version = 1
 
 # Raccourcis Discord simules (SendInput). DESACTIVE par defaut : lire docs/anti-triche.md avant d'activer.
 simulated_hotkeys_enabled = false

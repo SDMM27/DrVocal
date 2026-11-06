@@ -2,26 +2,34 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
 import sys
-import tempfile
 import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from drvocal.config import ConfigError, Settings, load_settings
+from drvocal.secrets_store import SecretStore
+from drvocal.storage import (
+    config_dir,
+    data_dir,
+    default_store,
+    documents_dir,
+    legacy_root,
+    logs_dir,
+    migrate_legacy,
+    resolve_data_path,
+)
 
-ROOT = Path(__file__).resolve().parent.parent.parent
 log = logging.getLogger("drvocal")
 QUIET_LOGGERS = ("spotipy", "urllib3", "httpcore", "httpcore2", "httpx", "httpx2", "discord", "asyncio")
 
 
 def setup_logging() -> Path:
     """Journal fichier tournant (1 Mo x 3). Les transcriptions ne sont ecrites qu'en DEBUG."""
-    base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-    path = base / "DrVocal" / "drvocal.log"
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path = logs_dir() / "drvocal.log"
     handler = RotatingFileHandler(path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s : %(message)s"))
     level = getattr(logging, os.environ.get("DRVOCAL_LOG_LEVEL", "INFO").upper(), logging.INFO)
@@ -31,20 +39,22 @@ def setup_logging() -> Path:
     return path
 
 
-def load_config(root: Path = ROOT) -> Settings:
-    """config.toml et secrets.toml a la racine ; config absente : reglages par defaut."""
-    config, secrets = root / "config.toml", root / "secrets.toml"
-    if config.exists():
-        return load_settings(config, secrets)
-    log.warning("config.toml absent, reglages par defaut")
-    with tempfile.TemporaryDirectory() as tmp:
-        empty = Path(tmp) / "config.toml"
-        empty.write_text("", encoding="utf-8")
-        return load_settings(empty, secrets)
+def load_config(directory: Path | None = None, store: SecretStore | None = None) -> Settings:
+    """config.toml dans config_dir() et secrets du SecretStore ; config absente : reglages par defaut."""
+    path = (directory or config_dir()) / "config.toml"
+    if not path.exists():
+        log.warning("config.toml absent (%s), reglages par defaut", path)
+    return load_settings(path, store if store is not None else default_store(), missing_ok=True)
 
 
 def _rooted(path: Path) -> Path:
-    return path if path.is_absolute() else ROOT / path
+    return resolve_data_path(path, legacy_root())
+
+
+def migrate_from_checkout(store: SecretStore) -> list[str]:
+    """Premier lancement depuis un checkout : importe config, secrets et jeton Spotify vers les dossiers utilisateur."""
+    root = legacy_root()
+    return migrate_legacy(root, config_dir(), store) if root is not None else []
 
 
 async def amain(settings: Settings, screen) -> None:
@@ -88,7 +98,7 @@ async def amain(settings: Settings, screen) -> None:
     transcriber = Transcriber(settings.stt_model, settings.stt_device, hotwords=hotwords)
     captures = None
     if log.isEnabledFor(logging.DEBUG):  # diagnostic : ce que le micro a capte apres chaque reveil
-        captures = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "DrVocal" / "captures"
+        captures = data_dir() / "captures"
     ears = Ears(MicStream().frames(), transcriber.transcribe, fresh_vad, captures)
 
     mode = settings.wake_mode
@@ -124,7 +134,7 @@ async def amain(settings: Settings, screen) -> None:
         runner.resolve_pending(pending_id, reply), loop))
 
     background: set[asyncio.Task] = set()
-    library = _register_optional(catalogue, settings, ears, speaker, background)
+    library = _register_optional(catalogue, settings, ears, speaker, background, default_store())
     if library is not None:
         spotify_library.append(library)
 
@@ -142,8 +152,7 @@ async def amain(settings: Settings, screen) -> None:
     if settings.command_log:
         from drvocal.command_log import CommandLog
 
-        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-        command_log = CommandLog(base / "DrVocal" / "commands").record
+        command_log = CommandLog(data_dir() / "commands").record
     assistant = Assistant(ears, detector, capture_command, lambda text: parse(text, settings),
                           catalogue, player, speaker, notify=lambda text: push(SessionEvent("text", text)),
                           command_log=command_log)
@@ -154,7 +163,7 @@ async def amain(settings: Settings, screen) -> None:
             task.cancel()
 
 
-def _register_optional(catalogue, settings: Settings, ears, speaker, background: set):
+def _register_optional(catalogue, settings: Settings, ears, speaker, background: set, store: SecretStore):
     """Spotify, Discord, raccourcis : un echec au demarrage est journalise et ignore.
 
     Renvoie la bibliotheque Spotify (ou None) pour le vocabulaire de transcription.
@@ -162,9 +171,10 @@ def _register_optional(catalogue, settings: Settings, ears, speaker, background:
     library = None
     if settings.spotify_client_id:
         try:
-            from drvocal.actions_spotify import build_client, register_spotify
+            from drvocal.actions_spotify import SecretStoreCacheHandler, build_client, register_spotify
 
-            library = register_spotify(catalogue, build_client(settings.spotify_client_id, ROOT / ".spotify-cache"))
+            client = build_client(settings.spotify_client_id, SecretStoreCacheHandler(store))
+            library = register_spotify(catalogue, client)
         except Exception:
             log.exception("Spotify indisponible")
     if settings.discord_bot_token and settings.discord_owner_id:
@@ -197,10 +207,53 @@ def _register_optional(catalogue, settings: Settings, ears, speaker, background:
     return library
 
 
-def main() -> int:
-    log_path = setup_logging()
+SECRET_NAMES = ("spotify_client_id", "spotify_token", "discord_bot_token", "claude_api_key")
+
+
+def check(store: SecretStore | None = None) -> int:
+    """`--check` : affiche emplacements et presence des secrets (jamais leurs valeurs), ne demarre rien."""
+    store = store if store is not None else default_store()
     try:
-        settings = load_config()
+        settings = load_config(store=store)
+    except ConfigError as exc:
+        print(f"Configuration invalide : {exc}")
+        return 1
+
+    def yes(flag: bool) -> str:
+        return "oui" if flag else "non"
+
+    cfg = config_dir() / "config.toml"
+    print(f"Configuration : {cfg} ({'trouvée' if cfg.exists() else 'absente, réglages par défaut'})")
+    print(f"Données : {data_dir()}")
+    print(f"Journaux : {logs_dir()}")
+    print(f"Notes : {settings.notes_dir}")
+    print(f"Documents : {documents_dir()}")
+    print("Secrets :")
+    for name in SECRET_NAMES:
+        print(f"  {name} : {yes(store.get(name) is not None)}")
+    wake = _rooted(settings.wake_models_dir)
+    print(f"Modèles de réveil ({wake}) : {yes(wake.is_dir() and any(wake.glob('*.onnx')))}")
+    print(f"Voix Piper ({_rooted(settings.tts_voice)}) : {yes(_rooted(settings.tts_voice).exists())}")
+    root = legacy_root()
+    if root is not None:
+        old = [n for n in ("config.toml", "secrets.toml", ".spotify-cache") if (root / n).exists()]
+        if old:
+            print(f"Anciens fichiers du dépôt à migrer au prochain lancement : {', '.join(old)}")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    if "--check" in args:  # ne migre rien et ne touche ni micro ni fenetre
+        for stream in (sys.stdout, sys.stderr):
+            if isinstance(stream, io.TextIOWrapper):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        return check()
+    log_path = setup_logging()
+    store = default_store()
+    try:
+        migrate_from_checkout(store)
+        settings = load_config(store=store)
     except ConfigError as exc:
         log.error("configuration invalide : %s", exc)
         return 1

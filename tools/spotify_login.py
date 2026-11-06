@@ -1,4 +1,4 @@
-"""Autorise Spotify une fois, avant d'utiliser la voix (le jeton est garde dans .spotify-cache).
+"""Autorise Spotify une fois, avant d'utiliser la voix (le jeton est garde chiffre dans le SecretStore).
 
     uv run python tools/spotify_login.py
 
@@ -7,19 +7,18 @@ Un jeton garde avec d'anciennes permissions est rejete par spotipy (scopes insuf
 """
 from __future__ import annotations
 
-from pathlib import Path
-
-from drvocal.__main__ import load_config
-from drvocal.actions_spotify import Library, build_client
-
-ROOT = Path(__file__).resolve().parent.parent
+from drvocal.__main__ import load_config, migrate_from_checkout
+from drvocal.actions_spotify import Library, SecretStoreCacheHandler, build_client
+from drvocal.storage import default_store
 
 
 def main() -> None:
-    settings = load_config(ROOT)
+    store = default_store()
+    migrate_from_checkout(store)  # importe l'ancien secrets.toml / .spotify-cache si on lance depuis le depot
+    settings = load_config(store=store)
     if not settings.spotify_client_id:
-        raise SystemExit("spotify_client_id absent de secrets.toml (voir README, section Spotify).")
-    client = build_client(settings.spotify_client_id, ROOT / ".spotify-cache")
+        raise SystemExit("spotify_client_id absent du SecretStore (voir README, section Spotify).")
+    client = build_client(settings.spotify_client_id, SecretStoreCacheHandler(store))
     devices = client.devices().get("devices", [])
     print("Spotify autorise. Appareils vus :", ", ".join(d["name"] for d in devices) or "aucun (normal si l'application est fermee)")
     entries = Library(client).entries()
