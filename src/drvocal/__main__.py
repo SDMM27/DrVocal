@@ -109,7 +109,7 @@ async def amain(settings: Settings, screen) -> None:
         journal = CommandLog(data_dir() / "commands")
         command_log = journal.record
         event_log = journal.record_event
-        on_rejected = lambda score: journal.record_event("wake_rejected", score=round(score, 2))  # noqa: E731
+        on_rejected = lambda score: journal.record_event("wake_rejected", score=round(float(score), 2))  # noqa: E731
 
     mode = settings.wake_mode
     models = sorted(_rooted(settings.wake_models_dir).glob("*.onnx")) if mode == "voice" else []
@@ -169,7 +169,8 @@ async def amain(settings: Settings, screen) -> None:
 
     assistant = Assistant(ears, detector, capture_command, lambda text: parse(text, settings),
                           catalogue, player, speaker, notify=lambda text: push(SessionEvent("text", text)),
-                          command_log=command_log, event_log=event_log)
+                          command_log=command_log, event_log=event_log,
+                          wake_phrases=settings.wake_phrases if mode == "voice" else ())
     try:
         await assistant.run()
     finally:

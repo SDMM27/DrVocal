@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import unicodedata
 import wave
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -47,6 +48,32 @@ class Timings:
 def _fold(text: str) -> str:
     decomposed = unicodedata.normalize("NFD", text.lower())
     return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+def after_wake_phrase(text: str, phrases: Sequence[str]) -> str | None:
+    """Ce qui suit la derniere phrase de reveil dans `text`, ou None s'il n'y en a pas.
+
+    Tolerant aux variantes de Whisper (« Salut Docteur Vocal ») : une occurrence est le premier mot
+    de la phrase suivi, au plus `len(mots)` mots plus loin, d'un mot commencant par son dernier mot.
+    Le reste est pris dans le texte d'origine, sans ponctuation ni espaces en tete.
+    """
+    words = [(_fold(m.group()), m.end()) for m in re.finditer(r"\w+", text)]
+    end: int | None = None
+    for phrase in phrases:
+        parts = _fold(phrase).split()
+        if not parts:
+            continue
+        for i, (word, _) in enumerate(words):
+            if word != parts[0]:
+                continue
+            for j in range(i + 1, min(i + len(parts) + 1, len(words))):
+                if words[j][0].startswith(parts[-1]):
+                    if end is None or words[j][1] > end:
+                        end = words[j][1]
+                    break
+    if end is None:
+        return None
+    return re.sub(r"^[^\w]+", "", text[end:])
 
 
 class Ears:
@@ -183,7 +210,10 @@ class Assistant:
     """Boucle principale : reveil, son, capture, parse, action en tache de fond, son de resultat.
 
     Redire le mot de reveil (ou rappuyer sur la touche) pendant l'ecoute ou la transcription
-    d'une commande l'abandonne et en ecoute une nouvelle.
+    d'une commande l'abandonne et en ecoute une nouvelle. Avec `wake_phrases` (mode vocal), le mot de
+    reveil dit en pleine phrase n'interrompt plus l'enregistrement : apres transcription, on garde ce
+    qui suit la derniere phrase de reveil retrouvee (rien apres : on reecoute), et a defaut toute la
+    phrase (le nom peut faire partie de la commande). Pendant la transcription, il relance toujours.
     """
 
     def __init__(
@@ -198,6 +228,7 @@ class Assistant:
         notify: Callable[[str], None] | None = None,
         command_log: Callable[..., None] | None = None,
         event_log: Callable[..., None] | None = None,
+        wake_phrases: Sequence[str] = (),
     ) -> None:
         self._ears = ears
         self._detector = detector
@@ -209,7 +240,9 @@ class Assistant:
         self._notify = notify
         self._command_log = command_log
         self._event_log = event_log
+        self._wake_phrases = tuple(wake_phrases)
         self._waking = False
+        self._rewoke = False  # reveil entendu pendant l'enregistrement, a verifier apres transcription
         self._restart = asyncio.Event()
         self._tasks: set[asyncio.Task] = set()
 
@@ -232,7 +265,12 @@ class Assistant:
         if not woke:
             return
         if self._waking:
-            self._restart.set()
+            if listening and self._wake_phrases:
+                if not self._rewoke:
+                    log.info("reveil en pleine phrase : verification apres transcription")
+                self._rewoke = True
+            else:
+                self._restart.set()
         else:
             self._waking = True
             self._spawn(self._on_wake())
@@ -240,6 +278,7 @@ class Assistant:
     async def _capture_or_restart(self) -> tuple[str | None, bool]:
         """(texte, False) ; ou (None, True) si le mot de reveil revient avant la fin."""
         self._restart.clear()
+        self._rewoke = False
         capture = asyncio.ensure_future(self._capture())
         restart = asyncio.ensure_future(self._restart.wait())
         try:
@@ -262,6 +301,14 @@ class Assistant:
             self._player.play("wake")
             while True:
                 text, restarted = await self._capture_or_restart()
+                if not restarted and text is not None and self._rewoke:
+                    rest = after_wake_phrase(text, self._wake_phrases)
+                    if rest is None:
+                        log.info("reveil en pleine phrase ignore")
+                    elif rest:
+                        text = rest
+                    else:
+                        restarted = True
                 if not restarted:
                     break
                 log.info("commande recommencee")

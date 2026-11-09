@@ -200,7 +200,7 @@ Avec `wake_mode = "voice"`, dis « salut doc vocal » (ou la phrase de `wake_phr
 
 ### Recommencer une demande
 
-Si tu t'es trompé ou que la réponse tarde, redis le mot de réveil (en mode touche : relâche puis rappuie) pendant l'écoute ou la transcription. La demande en cours est abandonnée, le son de réveil rejoue et Dr Vocal écoute la nouvelle. Pendant une dictée de note ou une réponse à Claude, le mot de réveil ne fait rien.
+Si tu t'es trompé ou que la réponse tarde, redis le mot de réveil (en mode touche : relâche puis rappuie) pendant l'écoute ou la transcription. La demande en cours est abandonnée, le son de réveil rejoue et Dr Vocal écoute la nouvelle. En mode vocal, redire le mot de réveil en pleine phrase n'interrompt plus l'enregistrement : une fois la phrase transcrite, Dr Vocal garde ce qui suit le mot de réveil s'il le retrouve dans la transcription (et réécoute s'il n'y a rien après), sinon il garde toute la phrase, par exemple quand « Dr Vocal » est le nom d'un projet. Pendant la transcription, le mot de réveil relance toujours. En mode touche, rien ne change : rappuyer abandonne tout de suite. Pendant une dictée de note ou une réponse à Claude, le mot de réveil ne fait rien.
 
 ### Sons de retour
 

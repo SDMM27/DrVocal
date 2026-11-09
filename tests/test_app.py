@@ -10,6 +10,7 @@ from drvocal.app import (
     Assistant,
     Ears,
     Timings,
+    after_wake_phrase,
     make_ask_user,
     make_event_handler,
     register_claude,
@@ -108,12 +109,12 @@ async def run_assistant(assistant: Assistant) -> None:
         await asyncio.wait_for(asyncio.gather(*list(assistant._tasks)), 10)
 
 
-def build(script, texts=None, catalogue=None, notify=None, capture=None):
+def build(script, texts=None, catalogue=None, notify=None, capture=None, wake_phrases=()):
     ears, transcribed = make_ears(script, texts)
     detector, player, speaker = Detector(), Player(), Speaker()
     catalogue = catalogue or FakeCatalogue()
     assistant = Assistant(ears, detector, capture or voice_capture(ears), parse, catalogue,
-                          player, speaker, notify)
+                          player, speaker, notify, wake_phrases=wake_phrases)
     return assistant, ears, detector, player, speaker, catalogue, transcribed
 
 
@@ -214,6 +215,85 @@ async def test_wake_word_during_capture_restarts_the_command():
     await run_assistant(assistant)
     assert heard == [2]  # une seule transcription, sans les 3 trames de la phrase abandonnee
     assert catalogue.ran == [Intent("spotify.pause", {})]
+    assert player.played == ["wake", "wake", "success"]
+
+
+PHRASES = ["salut doc vocal"]
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("demande à Claude sur Dr Vocal de lancer les tests", None),
+    ("mets du jazz salut docteur vocal mets pause", "mets pause"),
+    ("Salut, Dr Vocal. Pause. ", "Pause. "),
+    ("Salut doc vocal", ""),
+    ("mets salut doc vocal", ""),
+    ("mets salut doc vocal.", ""),
+    ("", None),
+])
+def test_after_wake_phrase(text, expected):
+    assert after_wake_phrase(text, PHRASES) == expected
+
+
+def test_after_wake_phrase_keeps_what_follows_the_last_occurrence():
+    assert after_wake_phrase("salut doc vocal mets salut docteur vocal pause", PHRASES) == "pause"
+
+
+async def _midsentence_wake(texts, script):
+    heard: list[int] = []
+    answers = iter(texts)
+
+    def transcribe(audio: np.ndarray) -> str:
+        heard.append(int((audio[::FRAME_SAMPLES] == SPEECH).sum()))
+        return next(answers)
+
+    ears = Ears(feed(script), transcribe, lambda: is_speech)
+    player, catalogue = Player(), FakeCatalogue()
+    assistant = Assistant(ears, Detector(), lambda: ears.listen(700, 2000, 15000), parse, catalogue,
+                          player, Speaker(), wake_phrases=PHRASES)
+    await run_assistant(assistant)
+    return heard, player, catalogue
+
+
+async def test_wake_word_mid_sentence_keeps_the_whole_sentence_without_wake_phrase():
+    script = [WAKE, SPEECH, SPEECH, WAKE, WAKE, SPEECH, *SILENCE_END, *GAP]
+    heard, player, catalogue = await _midsentence_wake(["pause"], script)
+    assert heard == [3]  # une seule transcription, de toute la phrase
+    assert catalogue.ran == [Intent("spotify.pause", {})]
+    assert player.played == ["wake", "success"]
+
+
+async def test_wake_word_mid_sentence_keeps_what_follows_the_wake_phrase():
+    script = [WAKE, SPEECH, SPEECH, WAKE, SPEECH, *SILENCE_END, *GAP]
+    heard, player, catalogue = await _midsentence_wake(["mets du jazz salut docteur vocal pause"], script)
+    assert heard == [3]
+    assert catalogue.ran == [Intent("spotify.pause", {})]
+    assert player.played == ["wake", "success"]
+
+
+async def test_transcription_ending_with_wake_phrase_listens_again():
+    script = [WAKE, SPEECH, WAKE, SPEECH, *SILENCE_END, *[SILENT] * 6, SPEECH, SPEECH, *SILENCE_END, *GAP]
+    heard, player, catalogue = await _midsentence_wake(["mets salut doc vocal", "pause"], script)
+    assert heard == [2, 2]
+    assert catalogue.ran == [Intent("spotify.pause", {})]
+    assert player.played == ["wake", "wake", "success"]
+
+
+async def test_wake_word_during_transcription_discards_the_result_with_wake_phrases():
+    started, release = asyncio.Event(), asyncio.Event()
+    captures = []
+
+    async def slow_capture():
+        captures.append(1)
+        if len(captures) == 1:
+            started.set()
+            await release.wait()
+            return "pause"
+        return "pause"
+
+    script = [WAKE, *[SILENT] * 5, WAKE, *GAP]
+    assistant, _, _, player, _, catalogue, _ = build(script, capture=slow_capture, wake_phrases=PHRASES)
+    await run_assistant(assistant)
+    assert len(captures) == 2
     assert player.played == ["wake", "wake", "success"]
 
 
