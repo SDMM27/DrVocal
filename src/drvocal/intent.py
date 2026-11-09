@@ -31,6 +31,8 @@ def _rx(pattern: str) -> re.Pattern[str]:
 
 
 _DE = r"(?:(?:de|que)\s+|d'|qu')?"
+# Whisper entend souvent "Cloud" ou "Claud" pour "Claude".
+_CLAUDE = r"(?:claude|claud|clode|clod|cloud|clowd)"
 
 # Ordre significatif : les regles specifiques passent avant "mets <query>".
 _SIMPLE_RULES = [
@@ -49,10 +51,11 @@ _SIMPLE_RULES = [
     ("journal.open", _rx(r"^(?:ouvre|ouvrir|montre|affiche|afficher)(?:~moi)? (?:le )?journal"
                          r"(?: (?:de|du) (?:dr\.?|docteur|doc)~?vocal)?$")),
     ("claude.stop", _rx(r"^(?:arrete|arretes|stop|stoppe|annule|coupe|termine) (?:la |cette )?(?:session )?(?:de )?"
-                        r"claude(?: agent)?$")),
+                        rf"{_CLAUDE}(?: agent)?$")),
     # Importe les sessions Claude Code d'arriere-plan dans l'application ; jamais "importe ce titre dans ma playlist".
-    ("claude.import", _rx(r"^(?:importe|importer) (?:(?:mes|les) )?(?:sessions? (?:de )?)?claude(?: code)?(?: sessions?)?$"
-                          r"|^(?:ouvre|ouvrir) (?:mes|les) sessions? (?:de )?claude(?: code)?$")),
+    ("claude.import", _rx(rf"^(?:importe|importes|importez|importer) (?:(?:mes|les) )?(?:sessions? (?:de )?)?"
+                          rf"{_CLAUDE}(?: code)?(?: sessions?)?$"
+                          rf"|^(?:ouvre|ouvres|ouvrez|ouvrir) (?:mes|les) sessions? (?:de )?{_CLAUDE}(?: code)?$")),
 ]
 # "ce titre" et ses variantes ; "ca" seul reste possible ("ajoute ca a ma playlist X").
 _THIS = r"(?:ce|le|cet) (?:titre|morceau|son|son-la|truc)|cette (?:chanson|musique|piste)|celui~ci|celle~ci|ca"
@@ -77,7 +80,7 @@ _VOLUME_DOWN = _rx(r"^(?:(?:baisse|diminue|descends|redescends) (?:un peu |encor
 _MESSAGE = _rx(r"^(?:ecris|envoie) dans (?:le salon )?(.+)$")
 _MOVE = _rx(r"^(?:va|vas|viens|mets~moi|deplace~moi) (?:dans|sur) (?:le )?(?:salon )?(.+)$")
 _MUTE_MEMBER = _rx(r"^(?:mute|coupe le micro de|rends muet) (.+)$")
-_CONTINUE = _rx(rf"^continue avec claude {_DE}(.+)$")
+_CONTINUE = _rx(rf"^continue avec {_CLAUDE} {_DE}(.+)$")
 _PLAY = _rx(r"^(?:je )?(?:mets|joue|lance|ouvre|j'ouvre) (.+)$")  # "Je joue..." : Whisper ajoute parfois "Je"
 # "ma playlist X" n'importe ou dans une phrase courte : le verbe est souvent mal transcrit
 # ("J'ouvre ma playlist...", "Je vous ma playlist...").
@@ -157,7 +160,7 @@ def parse(text: str, settings: Settings) -> Intent | None:
 
     for name in sorted(settings.projects, key=len, reverse=True):
         key = _words(name)
-        rx = _rx(rf"^(?:demande|dis) (?:a|à) claude (?:sur|dans|pour|avec) ({key}) {_DE}(.+)$")
+        rx = _rx(rf"^(?:demande|dis) (?:a|à) {_CLAUDE} (?:sur|dans|pour|avec) ({key}) {_DE}(.+)$")
         if m := rx.match(t):
             return Intent("claude.prompt", {"project": name, "prompt": orig[m.start(2):]})
 

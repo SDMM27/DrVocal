@@ -263,6 +263,17 @@ def test_claude_import_phrasings(text, settings):
     assert parse(text, settings) == Intent("claude.import", {})
 
 
+@pytest.mark.parametrize("text", ["IMPORTES MES SESSION CLOUD", "importez mes sessions Claud", "Importe mes sessions Clode."])
+def test_claude_import_understands_whisper_variants(text, settings):
+    # Whisper entend souvent "Cloud" pour "Claude" (journal du 2026-11-09)
+    assert parse(text, settings) == Intent("claude.import", {})
+
+
+def test_other_claude_commands_understand_cloud(settings):
+    assert parse("arrête Cloud", settings) == Intent("claude.stop", {})
+    assert parse("continue avec Cloud pour ajouter un test", settings) == Intent("claude.continue", {"prompt": "pour ajouter un test"})
+
+
 def test_playlist_import_is_not_claude_import(settings):
     for text in ("importe ce titre dans ma playlist X", "ajoute ce titre dans ma playlist X"):
         got = parse(text, settings)
