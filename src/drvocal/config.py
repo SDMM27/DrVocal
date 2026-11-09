@@ -39,6 +39,7 @@ class Settings:
     command_log: bool = True
     stt_hotwords: bool = True
     stt_vocabulary: list[str] = field(default_factory=list)
+    claude_command: str | None = None  # chemin de claude.exe ; sinon cherche dans le PATH
 
 
 def _as_bool(value: object) -> bool:
@@ -129,6 +130,7 @@ def load_settings(config_path: Path, store: SecretStore | None = None, *, missin
             command_log=_as_bool(data.get("command_log", True)),
             stt_hotwords=_as_bool(data.get("stt_hotwords", True)),
             stt_vocabulary=_as_str_list(data.get("stt_vocabulary", [])),
+            claude_command=str(data["claude_command"]).strip() or None if "claude_command" in data else None,
         )
     except (TypeError, ValueError, AttributeError) as e:
         raise ConfigError(f"Valeur invalide dans {config_path} : {e}") from e

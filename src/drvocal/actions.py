@@ -26,6 +26,7 @@ ACTION_NAMES = frozenset({
     "claude.prompt",
     "claude.continue",
     "claude.stop",
+    "claude.import",
 })
 
 

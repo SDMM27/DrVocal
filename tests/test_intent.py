@@ -255,3 +255,15 @@ def test_remember_the_playlist_playing_now_without_quotes(settings):
 @pytest.mark.parametrize("text,step", [("Mets le son plus fort", "up"), ("Mets la musique moins fort", "down")])
 def test_mets_le_son_plus_fort_is_volume(text, step, settings):
     assert parse(text, settings) == Intent("spotify.volume", {"step": step})
+
+
+@pytest.mark.parametrize("text", [
+    "importe mes sessions Claude", "importe les sessions claude", "importe Claude", "ouvre mes sessions Claude"])
+def test_claude_import_phrasings(text, settings):
+    assert parse(text, settings) == Intent("claude.import", {})
+
+
+def test_playlist_import_is_not_claude_import(settings):
+    for text in ("importe ce titre dans ma playlist X", "ajoute ce titre dans ma playlist X"):
+        got = parse(text, settings)
+        assert got is None or got.action != "claude.import"

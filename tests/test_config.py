@@ -154,3 +154,9 @@ def test_command_log_and_vocabulary_load(tmp_path):
 def test_invalid_command_log_and_vocabulary_values_raise(tmp_path, line):
     with pytest.raises(ConfigError):
         load_settings(write_config(tmp_path, line))
+
+
+def test_claude_command_defaults_to_none_and_loads(tmp_path):
+    assert load_settings(empty_config(tmp_path)).claude_command is None
+    s = load_settings(write_config(tmp_path, 'claude_command = "C:/bin/claude.exe"'))
+    assert s.claude_command == "C:/bin/claude.exe"

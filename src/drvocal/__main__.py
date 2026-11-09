@@ -63,8 +63,6 @@ async def amain(settings: Settings, screen) -> None:
         Assistant,
         Ears,
         Timings,
-        make_ask_user,
-        make_event_handler,
         register_claude,
         register_notes,
     )
@@ -74,7 +72,7 @@ async def amain(settings: Settings, screen) -> None:
     from drvocal.audio.stt import Transcriber
     from drvocal.audio.tts import Speaker
     from drvocal.audio.vad import SileroVAD
-    from drvocal.claude_session import ClaudeRunner, SessionEvent
+    from drvocal.claude_session import SessionEvent
     from drvocal.intent import parse
     from drvocal.journal import register_journal
 
@@ -142,15 +140,8 @@ async def amain(settings: Settings, screen) -> None:
     register_journal(catalogue)
     store = default_store()
 
-    def claude_api_key() -> str | None:
-        # Magasin chiffre d'abord ; la variable d'environnement reste un repli de developpement.
-        return store.get("claude_api_key") or os.environ.get("ANTHROPIC_API_KEY") or None
-
-    runner = ClaudeRunner(make_event_handler(player, push), make_ask_user(ears, speaker, timings),
-                          api_key_provider=claude_api_key, audit_path=logs_dir() / "claude-audit.jsonl")
-    register_claude(catalogue, runner, settings, api_key_provider=claude_api_key)
-    screen.on_decision(lambda pending_id, reply: asyncio.run_coroutine_threadsafe(
-        runner.resolve_pending(pending_id, reply), loop))
+    voice = _make_claude_voice(settings, player, push)
+    register_claude(catalogue, voice)
 
     background: set[asyncio.Task] = set()
     library = _register_optional(catalogue, settings, ears, speaker, background, store)
@@ -176,6 +167,37 @@ async def amain(settings: Settings, screen) -> None:
     finally:
         for task in background:
             task.cancel()
+
+
+def _make_claude_voice(settings: Settings, player, push):
+    """Controleur Claude Code, ou None (Claude Code absent ou aucun projet valide)."""
+    from drvocal.claude_cli import ClaudeCli, find_claude
+    from drvocal.claude_registry import Registry
+    from drvocal.claude_session import SessionEvent
+    from drvocal.claude_voice import ClaudeVoice
+    from drvocal.projects import validate_project_root
+
+    exe = find_claude(settings.claude_command)
+    if exe is None:
+        log.info("Claude Code introuvable : commandes Claude désactivées")
+        return None
+    projects: dict[str, Path] = {}
+    for name, path in settings.projects.items():
+        reason = validate_project_root(path)
+        if reason:
+            log.warning("projet Claude %r ignoré : %s", name, reason)
+        else:
+            projects[name] = path
+    if not projects:
+        log.info("aucun projet Claude valide : commandes Claude désactivées")
+        return None
+    voice = ClaudeVoice(
+        ClaudeCli(exe), Registry(data_dir() / "claude_sessions.json"), projects,
+        notify=lambda text: push(SessionEvent("text", text)),
+        error=lambda text: push(SessionEvent("error", text)),
+        play=player.play)
+    voice.start()
+    return voice
 
 
 def _register_optional(catalogue, settings: Settings, ears, speaker, background: set, store: SecretStore):

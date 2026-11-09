@@ -50,6 +50,9 @@ _SIMPLE_RULES = [
                          r"(?: (?:de|du) (?:dr\.?|docteur|doc)~?vocal)?$")),
     ("claude.stop", _rx(r"^(?:arrete|arretes|stop|stoppe|annule|coupe|termine) (?:la |cette )?(?:session )?(?:de )?"
                         r"claude(?: agent)?$")),
+    # Importe les sessions Claude Code d'arriere-plan dans l'application ; jamais "importe ce titre dans ma playlist".
+    ("claude.import", _rx(r"^(?:importe|importer) (?:(?:mes|les) )?(?:sessions? (?:de )?)?claude(?: code)?(?: sessions?)?$"
+                          r"|^(?:ouvre|ouvrir) (?:mes|les) sessions? (?:de )?claude(?: code)?$")),
 ]
 # "ce titre" et ses variantes ; "ca" seul reste possible ("ajoute ca a ma playlist X").
 _THIS = r"(?:ce|le|cet) (?:titre|morceau|son|son-la|truc)|cette (?:chanson|musique|piste)|celui~ci|celle~ci|ca"

@@ -1,6 +1,5 @@
 import asyncio
 import wave
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -450,72 +449,49 @@ async def test_approval_requires_exact_phrase(said, expected):
     assert await ask("Autoriser ?", "approval") is expected
 
 
-class FakeRunner:
-    def __init__(self):
-        self.stopped = 0
-        self.started: list[tuple] = []
-        self.resumed: list[str] = []
+class FakeVoice:
+    def __init__(self, result: bool = True):
+        self.result = result
+        self.calls: list[tuple] = []
 
-    async def start(self, project, prompt):
-        self.started.append((project, prompt))
+    async def prompt(self, project, text):
+        self.calls.append(("prompt", project, text))
+        return self.result
 
-    async def resume(self, prompt):
-        self.resumed.append(prompt)
+    async def proceed(self, text):
+        self.calls.append(("proceed", text))
+        return self.result
 
     async def stop(self):
-        self.stopped += 1
+        self.calls.append(("stop",))
+        return self.result
+
+    def import_all(self):
+        self.calls.append(("import",))
+        return self.result
 
 
-async def test_unknown_project_starts_nothing(settings):
-    catalogue, runner = Catalogue(), FakeRunner()
-    register_claude(catalogue, runner, settings, lambda: "sk-test", lambda p: None)
-    out = await catalogue.run(Intent("claude.prompt", {"project": "inconnu", "prompt": "fais x"}))
-    await asyncio.sleep(0.01)
-    assert out.ok is False and runner.started == []
-
-
-async def test_claude_prompt_and_continue_run_in_background(settings):
-    catalogue, runner = Catalogue(), FakeRunner()
-    register_claude(catalogue, runner, settings, lambda: "sk-test", lambda p: None)
-    out = await catalogue.run(Intent("claude.prompt", {"project": "mon site", "prompt": "fais x"}))
-    assert out.ok is True
-    out = await catalogue.run(Intent("claude.continue", {"prompt": "encore"}))
-    assert out.ok is True
-    await asyncio.sleep(0.01)
-    assert runner.started == [(Path("D:/site"), "fais x")]
-    assert runner.resumed == ["encore"]
-
-
-async def test_claude_stop_interrupts_the_runner(settings):
-    catalogue, runner = Catalogue(), FakeRunner()
-    register_claude(catalogue, runner, settings, lambda: "sk-test", lambda p: None)
-    out = await catalogue.run(Intent("claude.stop", {}))
-    assert out.ok is True and runner.stopped == 1
-
-
-async def test_claude_not_registered_without_api_key(settings, caplog):
-    import logging
-
-    catalogue, runner = Catalogue(), FakeRunner()
-    with caplog.at_level(logging.INFO):
-        register_claude(catalogue, runner, settings, lambda: None, lambda p: None)
-    for action in ("claude.prompt", "claude.continue", "claude.stop"):
-        out = await catalogue.run(Intent(action, {"project": "mon site", "prompt": "x"}))
+async def test_register_claude_without_voice_registers_nothing():
+    catalogue = Catalogue()
+    register_claude(catalogue, None)
+    for action in ("claude.prompt", "claude.continue", "claude.stop", "claude.import"):
+        out = await catalogue.run(Intent(action, {"project": "x", "prompt": "x"}))
         assert out.ok is False
-    assert "Claude Agent désactivé (aucune clé API)" in caplog.text
-    assert runner.started == [] and runner.resumed == [] and runner.stopped == 0
 
 
-async def test_refused_projects_are_ignored_with_a_warning(settings, caplog):
-    catalogue, runner = Catalogue(), FakeRunner()
-    refuse = lambda p: "trop sensible" if p == Path("D:/site") else None  # noqa: E731
-    register_claude(catalogue, runner, settings, lambda: "sk-test", refuse)
-    out = await catalogue.run(Intent("claude.prompt", {"project": "mon site", "prompt": "x"}))
-    await asyncio.sleep(0.01)
-    assert out.ok is False and runner.started == []
-    assert "mon site" in caplog.text
-    out = await catalogue.run(Intent("claude.prompt", {"project": "dr vocal", "prompt": "x"}))
-    assert out.ok is True
+@pytest.mark.parametrize("intent, call", [
+    (Intent("claude.prompt", {"project": "geogame", "prompt": "fais x"}), ("prompt", "geogame", "fais x")),
+    (Intent("claude.continue", {"prompt": "encore"}), ("proceed", "encore")),
+    (Intent("claude.stop", {}), ("stop",)),
+    (Intent("claude.import", {}), ("import",)),
+])
+@pytest.mark.parametrize("result", [True, False])
+async def test_claude_actions_call_the_voice_and_report_its_result(intent, call, result):
+    catalogue, voice = Catalogue(), FakeVoice(result)
+    register_claude(catalogue, voice)  # type: ignore[arg-type]
+    out = await catalogue.run(intent)
+    assert out.ok is result
+    assert voice.calls == [call]
 
 
 async def test_note_uses_long_silence(tmp_path):

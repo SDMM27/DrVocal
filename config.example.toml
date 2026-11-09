@@ -48,12 +48,16 @@ stt_device = "cpu"
 # (~400 caracteres au total, le reste est ignore).
 # stt_vocabulary = ["Dr Vocal", "Daft Punk"]
 
+# Chemin de claude.exe (Claude Code), si absent du PATH. Les commandes Claude exigent Claude Code.
+# claude_command = "C:/Users/moi/.local/bin/claude.exe"
+
 # Index du second ecran (0 = ecran principal).
 second_screen_index = 1
 
 # Projets : nom parle -> dossier. Les noms sont mis en minuscules au chargement.
 [projects]
 "Dr Vocal" = "D:/NasaCode/DrVocal"
+"GeoGame" = "D:/NasaCode/GeoGame"
 
 # Synonymes : phrase dite -> phrase canonique reconnue (enonce entier, minuscules).
 [synonyms]
