@@ -98,7 +98,7 @@ async def test_prompt_launches_in_the_project_folder_and_records_it(env):
     assert (rec.id, rec.uuid, rec.project, rec.state, rec.name) == ("abc123", UUID_A, "drvocal", "running", name)
     assert env.notes == [f"{name} : lancée"]
     assert Registry(env.path, now=lambda: NOW).latest() is not None  # sauvegarde
-    env.voice._task.cancel()  # type: ignore[union-attr]
+    await env.voice.close()
 
 
 async def test_prompt_unknown_project_fails_without_launching(env):
@@ -123,8 +123,9 @@ async def test_prompt_twice_concurrently_launches_once(env):
     env.cli.gate.set()
     results = await asyncio.gather(first, second)
     assert sorted(results) == [False, True]
+    assert env.errors == ["Claude travaille déjà sur drvocal."]
     assert len(env.cli.launched) == 1
-    env.voice._task.cancel()  # type: ignore[union-attr]
+    await env.voice.close()
 
 
 async def test_prompt_cli_error_is_shown_and_fails(env):
@@ -136,7 +137,7 @@ async def test_prompt_cli_error_is_shown_and_fails(env):
     env.cli.launch_error = None
     env.cli.agents_result = [_agent()]
     assert await env.voice.prompt("drvocal", "x") is True
-    env.voice._task.cancel()  # type: ignore[union-attr]
+    await env.voice.close()
 
 
 async def test_prompt_retries_agents_then_records_empty_uuid(env):
@@ -145,7 +146,7 @@ async def test_prompt_retries_agents_then_records_empty_uuid(env):
     assert env.cli.agents_calls == 3
     rec = env.registry.latest()
     assert rec is not None and rec.uuid == "" and rec.state == "running"
-    env.voice._task.cancel()  # type: ignore[union-attr]
+    await env.voice.close()
 
 
 async def test_poll_fills_a_missing_uuid(env):
@@ -205,14 +206,14 @@ async def test_proceed_resumes_the_latest_session(env):
     assert await env.voice.proceed("continue") is True
     assert env.cli.launched == [(Path(r"D:\NasaCode\DrVocal"), "drvocal – tests", "continue", UUID_A)]
     assert len(env.registry.records) == 1 and env.registry.records[0].state == "running"
-    env.voice._task.cancel()  # type: ignore[union-attr]
+    await env.voice.close()
 
 
 async def test_proceed_stops_a_waiting_session_first(env):
     env.registry.add(_rec(state="waiting"))
     assert await env.voice.proceed("oui") is True
     assert env.cli.stopped == ["abc123"]
-    env.voice._task.cancel()  # type: ignore[union-attr]
+    await env.voice.close()
 
 
 async def test_proceed_without_session_fails(env):
@@ -240,7 +241,7 @@ async def test_proceed_with_new_id_records_a_child(env):
     old, new = env.registry.records
     assert old.state == "done"
     assert (new.id, new.uuid, new.parent, new.state) == ("def456", UUID_B, "abc123", "running")
-    env.voice._task.cancel()  # type: ignore[union-attr]
+    await env.voice.close()
 
 
 async def test_stop_stops_the_latest_alive_session(env):
@@ -276,10 +277,114 @@ async def test_import_all_nothing_to_import(env):
 @pytest.mark.parametrize("error", [ClaudeCliError("invalide"), OSError("boom")])
 def test_import_all_failure_is_reported_and_keeps_going(env, error):
     env.registry.add(_rec("a", uuid=UUID_A, state="done"))
-    env.cli.import_error = error
+    env.registry.add(_rec("b", uuid=UUID_B, state="done"))
+    original = env.cli.open_import
+
+    def flaky(uuid):
+        if uuid == UUID_A:
+            raise error
+        original(uuid)
+
+    env.cli.open_import = flaky  # type: ignore[method-assign]
     assert env.voice.import_all() is False
-    assert env.registry.records[0].imported is False
+    assert [r.imported for r in env.registry.records] == [False, True]
     assert len(env.errors) == 1
+
+
+def test_import_all_skips_a_session_without_uuid(env):
+    env.registry.add(_rec("a", uuid="", state="done"))
+    assert env.voice.import_all() is True
+    assert env.cli.imported == [] and env.registry.records[0].imported is False
+    assert env.notes == ["drvocal – tests : pas encore prête, à importer plus tard"]
+
+
+async def test_proceed_refuses_a_session_without_uuid(env):
+    env.registry.add(_rec(uuid="", state="done"))
+    assert await env.voice.proceed("continue") is False
+    assert env.errors == ["Session Claude pas encore prête."]
+    assert env.cli.launched == []
+
+
+async def test_poll_waiting_session_seen_working_goes_back_to_running(env):
+    env.registry.add(_rec(state="waiting"))
+    env.cli.agents_result = [_agent()]
+    await env.voice.poll_once()
+    assert env.registry.records[0].state == "running"
+    assert env.beeps == []
+
+
+class SlowAgents:
+    """Bloque agents() jusqu'a ce qu'on le libere, en renvoyant la liste d'avant."""
+
+    def __init__(self, env):
+        self.gate = asyncio.Event()
+        real = env.cli.agents
+        self.snapshot: list[AgentInfo] = []
+
+        async def agents():
+            self.snapshot = await real()
+            await self.gate.wait()
+            return self.snapshot
+
+        env.cli.agents = agents  # type: ignore[method-assign]
+
+
+async def test_poll_ignores_a_session_resumed_during_the_wait(env):
+    env.registry.add(_rec(state="done"))
+    env.registry.add(_rec("w", state="waiting"))
+    env.cli.agents_result = []
+    slow = SlowAgents(env)
+    poll = asyncio.create_task(env.voice.poll_once())
+    await asyncio.sleep(0)
+    env.registry.records[0].state = "running"  # reprise pendant l'attente
+    env.registry.records[1].state = "running"
+    env.registry.records[0].id = "x"
+    slow.gate.set()
+    await poll
+    assert [r.state for r in env.registry.records] == ["running", "running"]
+    assert env.beeps == []
+
+
+async def test_poll_skips_a_record_added_during_the_wait(env):
+    env.registry.add(_rec("a"))
+    env.cli.agents_result = [_agent(id="a", status="idle", state="done")]
+    slow = SlowAgents(env)
+    poll = asyncio.create_task(env.voice.poll_once())
+    await asyncio.sleep(0)
+    env.registry.add(_rec("new"))  # absent de la liste, mais ajoute apres
+    slow.gate.set()
+    await poll
+    assert [r.state for r in env.registry.records] == ["done", "running"]
+    assert env.beeps == ["done"]
+
+
+async def test_proceed_same_id_during_a_poll_keeps_the_session_running(env):
+    env.registry.add(_rec(state="waiting"))
+    env.cli.agents_result = []  # liste perimee : la session n'y figure pas
+    slow = SlowAgents(env)
+    poll = asyncio.create_task(env.voice.poll_once())
+    await asyncio.sleep(0)
+    env.cli.agents_result = [_agent()]  # ce que verront les passes suivantes
+    assert await env.voice.proceed("continue") is True
+    slow.gate.set()
+    await poll
+    assert env.registry.records[0].state == "running"
+    assert env.beeps == []
+    await env.voice.close()
+
+
+async def test_prompt_survives_a_registry_save_failure(env):
+    env.cli.agents_result = [_agent()]
+
+    def broken():
+        raise OSError("disque plein")
+
+    env.registry.save = broken  # type: ignore[method-assign]
+    assert await env.voice.prompt("drvocal", "x") is True
+    assert env.errors == ["Impossible d'enregistrer les sessions Claude."]
+    assert env.notes == ["drvocal – x : lancée"]
+    assert env.voice._task is not None and not env.voice._task.done()
+    await env.voice.close()
 
 
 async def test_start_after_restart_resumes_watch_without_beeping_finished_ones(env):

@@ -1,5 +1,6 @@
 """Regles vocales des sessions Claude Code en arriere-plan : lancer, continuer, arreter, importer, surveiller."""
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -60,7 +61,7 @@ class ClaudeVoice:
                 id=short_id, uuid=uuid, project=project, path=str(path), name=name,
                 started=datetime.now(), state="running",
             ))
-            self._registry.save()
+            self._save()
         finally:
             self._launching.discard(project)
         self._notify(f"{name} : lancée")
@@ -76,6 +77,9 @@ class ClaudeVoice:
             return False
         if rec.state == "running" or self._is_busy(rec.project):
             self._error("Claude travaille encore.")
+            return False
+        if not rec.uuid:
+            self._error("Session Claude pas encore prête.")
             return False
         self._launching.add(rec.project)
         try:
@@ -93,7 +97,7 @@ class ClaudeVoice:
                     id=short_id, uuid=await self._find_uuid(short_id), project=rec.project, path=rec.path,
                     name=rec.name, started=datetime.now(), state="running", parent=rec.id,
                 ))
-            self._registry.save()
+            self._save()
         finally:
             self._launching.discard(rec.project)
         self._ensure_watch()
@@ -110,7 +114,7 @@ class ClaudeVoice:
             self._error(str(exc))
             return False
         rec.state = "stopped"
-        self._registry.save()
+        self._save()
         self._notify(f"{rec.name} : arrêtée")
         return True
 
@@ -120,25 +124,37 @@ class ClaudeVoice:
             if rec.state == "running" and not rec.imported:
                 self._notify(f"{rec.name} : encore en cours, à importer plus tard")
         for rec in self._registry.to_import():
+            if not rec.uuid:
+                self._notify(f"{rec.name} : pas encore prête, à importer plus tard")
+                continue
             try:
                 self._cli.open_import(rec.uuid)
-            except (ClaudeCliError, OSError) as exc:
+            except ClaudeCliError as exc:
                 log.warning("import de %s impossible : %s", rec.id, exc)
-                self._error(str(exc) if isinstance(exc, ClaudeCliError) else f"Impossible d'ouvrir Claude Code : {exc}")
+                self._error(str(exc))
+                ok = False
+                continue
+            except OSError as exc:
+                log.warning("import de %s impossible : %s", rec.id, exc)
+                self._error(f"Impossible d'ouvrir Claude Code : {exc}")
                 ok = False
                 continue
             rec.imported = True
-        self._registry.save()
+        self._save()
         return ok
 
     async def poll_once(self) -> None:
+        # photo avant l'attente : on ne touche qu'aux sessions inchangees depuis
+        snapshot = [(rec, rec.state) for rec in self._registry.alive()]
         try:
             agents = {a.id: a for a in await self._cli.agents()}
         except ClaudeCliError as exc:
             log.warning("liste des sessions Claude illisible : %s", exc)
             return
         changed = False
-        for rec in self._registry.alive():
+        for rec, state in snapshot:
+            if rec.state != state:
+                continue
             agent = agents.get(rec.id)
             if agent is None:
                 rec.state = "stopped"
@@ -148,6 +164,9 @@ class ClaudeVoice:
                 rec.uuid = agent.uuid
                 changed = True
             if (agent.status, agent.state) in self._working:
+                if rec.state == "waiting":
+                    rec.state = "running"
+                    changed = True
                 continue
             if agent.status == "idle":
                 rec.state = "done"
@@ -164,13 +183,28 @@ class ClaudeVoice:
                 self._notify(f"{rec.name} : attend ta réponse")
                 changed = True
         if changed:
-            self._registry.save()
+            self._save()
 
     def start(self) -> None:
         pending = len(self._registry.to_import())
         if pending:
             self._notify(f"{pending} session{'s' if pending > 1 else ''} Claude à importer")
         self._ensure_watch()
+
+    def _save(self) -> None:
+        try:
+            self._registry.save()
+        except OSError as exc:
+            log.warning("registre Claude non enregistre : %s", exc)
+            self._error("Impossible d'enregistrer les sessions Claude.")
+
+    async def close(self) -> None:
+        task, self._task = self._task, None
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
     def _is_busy(self, project: str) -> bool:
         return project in self._launching or any(
