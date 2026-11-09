@@ -439,7 +439,7 @@ class FakeVoice:
         self.calls.append(("stop",))
         return self.result
 
-    def import_all(self):
+    async def import_all(self):
         self.calls.append(("import",))
         return self.result
 

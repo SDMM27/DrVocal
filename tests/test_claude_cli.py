@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -56,6 +57,23 @@ def test_parse_agents_state_is_optional():
 def test_parse_agents_rejects_non_json():
     with pytest.raises(ClaudeCliError):
         parse_agents("warning: update available\n")
+
+
+def test_parse_agents_skips_a_warning_before_the_array():
+    out = "warning: update available\n" + json.dumps(
+        [{"id": "a1", "cwd": "D:\\x", "kind": "background", "sessionId": UUID, "status": "idle"}], indent=2)
+    assert [a.id for a in parse_agents(out)] == ["a1"]
+
+
+def test_parse_agents_rejects_a_warning_without_array():
+    with pytest.raises(ClaudeCliError):
+        parse_agents("[warn] update available\n{}")
+
+
+def test_parse_agents_coerces_status_and_state_to_text():
+    out = json.dumps([{"id": "a1", "kind": "background", "sessionId": UUID, "status": 3, "state": 7}])
+    agent = parse_agents(out)[0]
+    assert (agent.status, agent.state) == ("3", "7")
 
 
 def test_parse_agents_rejects_a_non_array():
@@ -156,6 +174,51 @@ def test_find_claude(tmp_path, monkeypatch):
     assert find_claude(str(exe)) == str(exe)
     monkeypatch.setattr(claude_cli.shutil, "which", lambda name: "C:/bin/claude.exe")
     assert find_claude(str(tmp_path / "absent.exe")) == "C:/bin/claude.exe"
+    assert find_claude(str(tmp_path)) == "C:/bin/claude.exe"  # un dossier n'est pas un executable
     assert find_claude(None) == "C:/bin/claude.exe"
     monkeypatch.setattr(claude_cli.shutil, "which", lambda name: None)
     assert find_claude(None) is None
+
+
+@pytest.mark.parametrize("name", ["claude.cmd", "claude.BAT"])
+def test_find_claude_refuses_a_batch_file(tmp_path, monkeypatch, caplog, name):
+    script = tmp_path / name
+    script.write_text("")
+    monkeypatch.setattr(claude_cli.shutil, "which", lambda _: None)
+    assert find_claude(str(script)) is None
+    monkeypatch.setattr(claude_cli.shutil, "which", lambda _: f"C:/npm/{name}")
+    assert find_claude(None) is None
+    assert name in caplog.text
+
+
+class HangingProc:
+    def __init__(self):
+        self.killed = False
+        self.waited = False
+        self.returncode = None
+
+    async def communicate(self):
+        await asyncio.Event().wait()
+
+    def kill(self):
+        self.killed = True
+
+    async def wait(self):
+        self.waited = True
+        self.returncode = -9
+
+
+async def test_run_kills_the_child_when_cancelled(monkeypatch):
+    proc = HangingProc()
+
+    async def spawn(*args, **kwargs):
+        return proc
+
+    monkeypatch.setattr(claude_cli.asyncio, "create_subprocess_exec", spawn)
+    task = asyncio.create_task(claude_cli._run(["claude"], None, 30))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert proc.killed and proc.waited

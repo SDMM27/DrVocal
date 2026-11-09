@@ -25,6 +25,7 @@ class FakeCli:
         self.next_id = "abc123"
         self.gate: asyncio.Event | None = None
         self.agents_calls = 0
+        self.stop_error: dict[str, ClaudeCliError] = {}
 
     async def launch(self, cwd, name, prompt, resume=None):
         if self.gate is not None:
@@ -41,6 +42,8 @@ class FakeCli:
         return list(self.agents_result)
 
     async def stop(self, short_id):
+        if short_id in self.stop_error:
+            raise self.stop_error[short_id]
         self.stopped.append(short_id)
 
     def open_import(self, uuid):
@@ -71,11 +74,12 @@ class Env:
         self.errors: list[str] = []
         self.beeps: list[str] = []
         self.sleeps: list[float] = []
+        self.clock = 1000.0
         self.voice = ClaudeVoice(
             self.cli, self.registry,  # type: ignore[arg-type]
             {"drvocal": Path(r"D:\NasaCode\DrVocal")},
             self.notes.append, self.errors.append, self.beeps.append,
-            sleep=self._sleep,
+            sleep=self._sleep, clock=lambda: self.clock,
         )
 
     async def _sleep(self, delay):
@@ -206,6 +210,7 @@ async def test_proceed_resumes_the_latest_session(env):
     assert await env.voice.proceed("continue") is True
     assert env.cli.launched == [(Path(r"D:\NasaCode\DrVocal"), "drvocal – tests", "continue", UUID_A)]
     assert len(env.registry.records) == 1 and env.registry.records[0].state == "running"
+    assert env.notes == ["drvocal – tests : relancée"]
     await env.voice.close()
 
 
@@ -262,20 +267,38 @@ async def test_stop_without_alive_session_does_nothing(env):
 async def test_import_all_opens_each_finished_session_once(env):
     env.registry.add(_rec("a", uuid=UUID_A, state="done"))
     env.registry.add(_rec("b", uuid=UUID_B, state="running"))
-    assert env.voice.import_all() is True
+    assert await env.voice.import_all() is True
     assert env.cli.imported == [UUID_A]
     assert env.registry.records[0].imported is True
     assert env.notes == ["drvocal – tests : encore en cours, à importer plus tard"]
-    assert env.voice.import_all() is True
+    assert await env.voice.import_all() is True
     assert env.cli.imported == [UUID_A]
 
 
 async def test_import_all_nothing_to_import(env):
-    assert env.voice.import_all() is True
+    assert await env.voice.import_all() is True
+
+
+async def test_import_all_stops_a_waiting_session_before_opening_it(env):
+    env.registry.add(_rec("w", uuid=UUID_A, state="waiting"))
+    assert await env.voice.import_all() is True
+    assert env.cli.stopped == ["w"] and env.cli.imported == [UUID_A]
+    rec = env.registry.records[0]
+    assert rec.state == "stopped" and rec.imported is True
+
+
+async def test_import_all_skips_a_waiting_session_it_cannot_stop(env):
+    env.registry.add(_rec("w", uuid=UUID_A, state="waiting"))
+    env.registry.add(_rec("d", uuid=UUID_B, state="done"))
+    env.cli.stop_error["w"] = ClaudeCliError("Claude Code n'a pas pu arrêter la session (code 1).")
+    assert await env.voice.import_all() is False
+    assert env.cli.imported == [UUID_B]
+    assert [(r.state, r.imported) for r in env.registry.records] == [("waiting", False), ("done", True)]
+    assert env.errors == ["Claude Code n'a pas pu arrêter la session (code 1)."]
 
 
 @pytest.mark.parametrize("error", [ClaudeCliError("invalide"), OSError("boom")])
-def test_import_all_failure_is_reported_and_keeps_going(env, error):
+async def test_import_all_failure_is_reported_and_keeps_going(env, error):
     env.registry.add(_rec("a", uuid=UUID_A, state="done"))
     env.registry.add(_rec("b", uuid=UUID_B, state="done"))
     original = env.cli.open_import
@@ -286,16 +309,22 @@ def test_import_all_failure_is_reported_and_keeps_going(env, error):
         original(uuid)
 
     env.cli.open_import = flaky  # type: ignore[method-assign]
-    assert env.voice.import_all() is False
+    assert await env.voice.import_all() is False
     assert [r.imported for r in env.registry.records] == [False, True]
     assert len(env.errors) == 1
 
 
-def test_import_all_skips_a_session_without_uuid(env):
+async def test_import_all_ignores_a_session_without_uuid(env):
     env.registry.add(_rec("a", uuid="", state="done"))
-    assert env.voice.import_all() is True
+    assert await env.voice.import_all() is True
     assert env.cli.imported == [] and env.registry.records[0].imported is False
-    assert env.notes == ["drvocal – tests : pas encore prête, à importer plus tard"]
+    assert env.notes == []
+
+
+def test_start_does_not_count_a_session_without_uuid(env):
+    env.registry.add(_rec("a", uuid="", state="done"))
+    env.voice.start()
+    assert env.notes == []
 
 
 async def test_proceed_refuses_a_session_without_uuid(env):
@@ -417,3 +446,88 @@ async def test_watch_loop_survives_an_unexpected_error(env, caplog):
     await env.voice._task  # type: ignore[misc]
     assert len(calls) == 2
     assert "inattendu" in caplog.text
+
+
+async def _launched(env):
+    env.cli.agents_result = [_agent()]
+    assert await env.voice.prompt("drvocal", "x") is True
+    await env.voice.close()  # la surveillance est pilotee a la main
+    env.cli.agents_result = [_agent(status="idle", state="done")]
+
+
+async def test_poll_idle_right_after_prompt_keeps_the_session_running(env):
+    await _launched(env)
+    await env.voice.poll_once()
+    assert env.registry.records[0].state == "running"
+    assert env.beeps == [] and env.cli.stopped == []
+
+
+async def test_poll_idle_after_being_seen_working_is_done(env):
+    await _launched(env)
+    env.cli.agents_result = [_agent()]
+    await env.voice.poll_once()
+    env.cli.agents_result = [_agent(status="idle", state="done")]
+    await env.voice.poll_once()
+    assert env.registry.records[0].state == "done"
+    assert env.beeps == ["done"] and env.cli.stopped == ["abc123"]
+
+
+async def test_poll_idle_after_being_seen_waiting_is_done(env):
+    await _launched(env)
+    env.cli.agents_result = [_agent(status="waiting", state="blocked")]
+    await env.voice.poll_once()
+    env.cli.agents_result = [_agent(status="idle", state="done")]
+    await env.voice.poll_once()
+    assert env.registry.records[0].state == "done"
+
+
+async def test_poll_idle_30_s_after_prompt_is_done(env):
+    await _launched(env)
+    env.clock += 29
+    await env.voice.poll_once()
+    assert env.registry.records[0].state == "running"
+    env.clock += 1
+    await env.voice.poll_once()
+    assert env.registry.records[0].state == "done"
+    assert env.beeps == ["done"]
+
+
+async def _resumed(env):
+    env.registry.add(_rec(state="done"))
+    assert await env.voice.proceed("continue") is True
+    await env.voice.close()
+    env.cli.agents_result = [_agent(status="idle", state="done")]
+
+
+async def test_poll_idle_right_after_proceed_keeps_the_session_running(env):
+    await _resumed(env)
+    await env.voice.poll_once()
+    assert env.registry.records[0].state == "running"
+    assert env.beeps == [] and env.cli.stopped == []
+
+
+async def test_poll_idle_after_proceed_seen_working_is_done(env):
+    await _resumed(env)
+    env.cli.agents_result = [_agent()]
+    await env.voice.poll_once()
+    env.cli.agents_result = [_agent(status="idle", state="done")]
+    await env.voice.poll_once()
+    assert env.registry.records[0].state == "done" and env.beeps == ["done"]
+
+
+async def test_poll_idle_30_s_after_proceed_is_done(env):
+    await _resumed(env)
+    env.clock += 30
+    await env.voice.poll_once()
+    assert env.registry.records[0].state == "done" and env.beeps == ["done"]
+
+
+async def test_poll_idle_after_proceed_with_a_new_id_waits_too(env):
+    env.registry.add(_rec(state="done"))
+    env.cli.next_id = "def456"
+    env.cli.agents_result = [_agent(id="def456", uuid=UUID_B)]
+    assert await env.voice.proceed("continue") is True
+    await env.voice.close()
+    env.cli.agents_result = [_agent(id="def456", uuid=UUID_B, status="idle", state="done")]
+    await env.voice.poll_once()
+    assert env.registry.records[1].state == "running" and env.beeps == []

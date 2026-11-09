@@ -2,6 +2,7 @@
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ log = logging.getLogger(__name__)
 WORKING: frozenset[tuple[str, str | None]] = frozenset({("busy", "working")})
 AGENTS_ATTEMPTS = 3
 AGENTS_RETRY_DELAY = 1.0
+START_GRACE = 30.0
 
 
 class ClaudeVoice:
@@ -28,6 +30,7 @@ class ClaudeVoice:
         working: frozenset[tuple[str, str | None]] = WORKING,
         interval: float = 5.0,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        clock: Callable[[], float] = time.monotonic,
     ):
         self._cli = cli
         self._registry = registry
@@ -38,6 +41,9 @@ class ClaudeVoice:
         self._working = working
         self._interval = interval
         self._sleep = sleep
+        self._clock = clock
+        # id -> (heure du lancement ou de la reprise, vue au travail depuis) ; absente = session ancienne
+        self._fresh: dict[str, tuple[float, bool]] = {}
         self._launching: set[str] = set()
         self._task: asyncio.Task[None] | None = None
 
@@ -56,6 +62,7 @@ class ClaudeVoice:
             except ClaudeCliError as exc:
                 self._error(str(exc))
                 return False
+            self._fresh[short_id] = (self._clock(), False)
             uuid = await self._find_uuid(short_id)
             self._registry.add(SessionRecord(
                 id=short_id, uuid=uuid, project=project, path=str(path), name=name,
@@ -90,6 +97,7 @@ class ClaudeVoice:
             except ClaudeCliError as exc:
                 self._error(str(exc))
                 return False
+            self._fresh[short_id] = (self._clock(), False)
             if short_id == rec.id:
                 rec.state = "running"
             else:
@@ -100,6 +108,7 @@ class ClaudeVoice:
             self._save()
         finally:
             self._launching.discard(rec.project)
+        self._notify(f"{rec.name} : relancée")
         self._ensure_watch()
         return True
 
@@ -118,15 +127,22 @@ class ClaudeVoice:
         self._notify(f"{rec.name} : arrêtée")
         return True
 
-    def import_all(self) -> bool:
+    async def import_all(self) -> bool:
         ok = True
         for rec in self._registry.records:
             if rec.state == "running" and not rec.imported:
                 self._notify(f"{rec.name} : encore en cours, à importer plus tard")
         for rec in self._registry.to_import():
-            if not rec.uuid:
-                self._notify(f"{rec.name} : pas encore prête, à importer plus tard")
-                continue
+            if rec.state == "waiting":
+                # sinon l'app reprendrait une conversation encore vivante en arriere-plan
+                try:
+                    await self._cli.stop(rec.id)
+                except ClaudeCliError as exc:
+                    log.warning("arret de %s avant import impossible : %s", rec.id, exc)
+                    self._error(str(exc))
+                    ok = False
+                    continue
+                rec.state = "stopped"
             try:
                 self._cli.open_import(rec.uuid)
             except ClaudeCliError as exc:
@@ -158,17 +174,22 @@ class ClaudeVoice:
             agent = agents.get(rec.id)
             if agent is None:
                 rec.state = "stopped"
+                self._fresh.pop(rec.id, None)
                 changed = True
                 continue
             if not rec.uuid and agent.uuid:
                 rec.uuid = agent.uuid
                 changed = True
             if (agent.status, agent.state) in self._working:
+                self._seen_working(rec.id)
                 if rec.state == "waiting":
                     rec.state = "running"
                     changed = True
                 continue
             if agent.status == "idle":
+                if self._not_started_yet(rec.id):
+                    continue
+                self._fresh.pop(rec.id, None)
                 rec.state = "done"
                 self._play("done")
                 self._notify(f"{rec.name} : finie")
@@ -177,7 +198,10 @@ class ClaudeVoice:
                 except ClaudeCliError as exc:
                     log.warning("arret de %s impossible : %s", rec.id, exc)
                 changed = True
-            elif rec.state != "waiting":
+            else:
+                self._seen_working(rec.id)
+                if rec.state == "waiting":
+                    continue
                 rec.state = "waiting"
                 self._play("done")
                 self._notify(f"{rec.name} : attend ta réponse")
@@ -205,6 +229,18 @@ class ClaudeVoice:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+
+    def _seen_working(self, short_id: str) -> None:
+        if short_id in self._fresh:
+            self._fresh[short_id] = (self._fresh[short_id][0], True)
+
+    def _not_started_yet(self, short_id: str) -> bool:
+        # juste apres un lancement, la CLI peut encore lister "idle" avant de prendre le prompt
+        launched = self._fresh.get(short_id)
+        if launched is None:
+            return False
+        at, seen = launched
+        return not seen and self._clock() - at < START_GRACE
 
     def _is_busy(self, project: str) -> bool:
         return project in self._launching or any(

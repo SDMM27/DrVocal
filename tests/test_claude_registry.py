@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from drvocal.claude_registry import Registry, SessionRecord
@@ -81,4 +81,15 @@ def test_to_import_excludes_running_imported_and_replaced(tmp_path):
     reg.add(_rec("parent", state="stopped"))
     reg.add(_rec("child", parent="parent", state="waiting"))
     reg.add(_rec("other", state="failed"))
+    reg.add(_rec("no-uuid", uuid=""))
     assert [r.id for r in reg.to_import()] == ["child", "other"]
+
+
+def test_aware_start_date_does_not_crash_the_load(tmp_path, caplog):
+    path = tmp_path / "r.json"
+    reg = _registry(path)
+    reg.add(_rec("a", started=datetime(2026, 11, 1, tzinfo=UTC), imported=True))
+    reg.save()
+    with caplog.at_level(logging.WARNING):
+        assert _registry(path).records == []
+    assert any(r.levelno == logging.WARNING for r in caplog.records)

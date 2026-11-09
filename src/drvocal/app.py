@@ -397,7 +397,7 @@ def register_claude(catalogue: Catalogue, voice: ClaudeVoice | None) -> None:
         return Outcome(await voice.stop())
 
     async def import_all(_: Intent) -> Outcome:
-        return Outcome(voice.import_all())
+        return Outcome(await voice.import_all())
 
     catalogue.register("claude.prompt", prompt)
     catalogue.register("claude.continue", proceed)

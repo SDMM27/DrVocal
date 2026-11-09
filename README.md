@@ -232,7 +232,7 @@ Les commandes sont analysées par des règles (accents et majuscules ignorés), 
   - « ouvre le journal », « montre le journal », « affiche le journal », « montre-moi le journal », « ouvre le journal de Dr Vocal » : ouvre la fenêtre du journal (voir plus bas).
 - **Claude Code** (seulement si Claude Code est installé et qu'un projet valide est dans `[projects]`)
   - « demande à Claude sur Dr Vocal de lancer les tests » (prépositions acceptées : `sur`, `dans`, `pour`, `avec`) : lance une session en arrière-plan dans ce projet
-  - « continue avec Claude pour ajouter un test » : poursuit la session en cours du projet
+  - « continue avec Claude pour ajouter un test » : poursuit la dernière session lancée à la voix (refusé tant que Claude travaille encore, ou si cette session a déjà été importée)
   - « arrête Claude », « stop Claude », « arrête la session Claude » : interrompt la session en cours
   - « importe mes sessions Claude » : ouvre dans l'app Claude les sessions lancées à la voix
 - **Synonymes** : tout énoncé entier défini dans `[synonyms]`.
@@ -251,7 +251,7 @@ Les sessions Claude Code tournent en arrière-plan, sur ton abonnement, en mode 
 
 ## Journal des commandes et vocabulaire
 
-Chaque commande dite après le réveil est notée dans `%LOCALAPPDATA%\DrVocal\commands\commands.jsonl` : date, texte transcrit, action et arguments compris (ou `null` si la commande n'a pas été comprise), succès, durée de transcription et d'action. Le texte comprend donc les messages Discord et les prompts Claude dictés dans la commande. Les dictées de notes ne sont pas journalisées. Le WAV de la commande n'est gardé que pour un échec (non comprise ou action échouée), dans `commandsailures` (200 plus récents). Le fichier tourne à 2 Mo (`commands.1.jsonl`). Tout reste local sur ton PC.
+Chaque commande dite après le réveil est notée dans `%LOCALAPPDATA%\DrVocal\commands\commands.jsonl` : date, texte transcrit, action et arguments compris (ou `null` si la commande n'a pas été comprise), succès, durée de transcription et d'action. Le texte comprend donc les messages Discord et les prompts Claude dictés dans la commande. Les dictées de notes ne sont pas journalisées. Le WAV de la commande n'est gardé que pour un échec (non comprise ou action échouée), dans `commands\failures` (200 plus récents). Le fichier tourne à 2 Mo (`commands.1.jsonl`). Tout reste local sur ton PC.
 
 Pour le désactiver : `command_log = false` dans `config.toml`.
 

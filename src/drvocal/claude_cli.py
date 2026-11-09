@@ -1,6 +1,8 @@
 """Couche mince autour de l'executable `claude` (Claude Code) : sessions en arriere-plan."""
 import asyncio
+import contextlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -9,6 +11,8 @@ import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 LAUNCH_TIMEOUT = 30.0
 SESSION_NAME_MAX = 50
@@ -37,12 +41,25 @@ def parse_backgrounded(output: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _json_array(output: str) -> list | None:
+    # stderr est mele a stdout : un avertissement peut preceder le tableau
+    decoder = json.JSONDecoder()
+    start = 0
+    for line in output.splitlines(keepends=True):
+        if line.startswith("["):
+            try:
+                data, _ = decoder.raw_decode(output, start)
+            except ValueError:
+                data = None
+            if isinstance(data, list):
+                return data
+        start += len(line)
+    return None
+
+
 def parse_agents(output: str) -> list[AgentInfo]:
-    try:
-        data = json.loads(output)
-    except ValueError as exc:
-        raise ClaudeCliError("Claude Code a renvoyé une liste illisible.") from exc
-    if not isinstance(data, list):
+    data = _json_array(output)
+    if data is None:
         raise ClaudeCliError("Claude Code a renvoyé une liste illisible.")
     agents = []
     for entry in data:
@@ -53,7 +70,7 @@ def parse_agents(output: str) -> list[AgentInfo]:
             uuid=str(entry.get("sessionId", "")),
             cwd=str(entry.get("cwd", "")),
             status=str(entry.get("status", "")),
-            state=entry.get("state"),
+            state=None if entry.get("state") is None else str(entry["state"]),
         ))
     return agents
 
@@ -75,8 +92,9 @@ async def _run(args: list[str], cwd: Path | None, timeout: float) -> tuple[int, 
     )
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout)
-    except TimeoutError:
-        proc.kill()
+    except BaseException:  # delai depasse ou annulation : ne pas laisser le processus orphelin
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
         await proc.wait()
         raise
     return proc.returncode or 0, out.decode("utf-8", errors="replace")
@@ -129,6 +147,16 @@ class ClaudeCli:
 
 
 def find_claude(configured: str | None) -> str | None:
-    if configured and Path(configured).exists():
-        return configured
-    return shutil.which("claude")
+    exe = None
+    if configured:
+        if Path(configured).is_file():
+            exe = configured
+        else:
+            log.warning("claude_command introuvable (%s), recherche dans le PATH", configured)
+    if exe is None:
+        exe = shutil.which("claude")
+    # un .cmd/.bat passe par cmd.exe, qui reinterprete les arguments (injection)
+    if exe and Path(exe).suffix.lower() in (".cmd", ".bat"):
+        log.warning("Claude Code ignore : %s est un script batch, il faut claude.exe", exe)
+        return None
+    return exe

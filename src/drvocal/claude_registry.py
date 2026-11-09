@@ -55,13 +55,14 @@ class Registry:
             if not isinstance(raw, list):
                 raise ValueError("liste attendue")
             records = [_from_json(item) for item in raw]
+            limit = self._now() - IMPORTED_TTL
+            # une date avec fuseau ne se compare pas : TypeError, traite comme un fichier corrompu
+            return [r for r in records if not (r.imported and r.started < limit)]
         except FileNotFoundError:
             return []
         except (OSError, ValueError, KeyError, TypeError):
             log.warning("registre Claude illisible (%s), liste vide", self._path.name)
             return []
-        limit = self._now() - IMPORTED_TTL
-        return [r for r in records if not (r.imported and r.started < limit)]
 
     def add(self, rec: SessionRecord) -> None:
         self.records.append(rec)
@@ -85,5 +86,5 @@ class Registry:
         replaced = {r.parent for r in self.records if r.parent}
         return [
             r for r in self.records
-            if not r.imported and r.state != "running" and r.id not in replaced
+            if r.uuid and not r.imported and r.state != "running" and r.id not in replaced
         ]
