@@ -115,5 +115,5 @@ L'actuel « Claude Agent » (SDK `claude-agent-sdk`, clé API, politique d'autor
 
 - Intervalle de surveillance : 5 s. Délai de lancement : 30 s.
 - Arrêter la session après son tour (`claude stop`) plutôt que la laisser `idle`.
-- Pas de worktree (`-w`) : Claude travaille directement dans le dossier du projet, comme l'essai. Une seule session à la fois par projet : un nouveau « demande à Claude sur X » pendant qu'une session de X est `busy` échoue avec un message à l'écran.
+- Dr Vocal ne passe pas `-w`. L'essai de la tâche 1 du plan a montré que Claude Code crée lui-même un worktree (`.claude/worktrees/<nom>`, sur une branche `worktree-<nom>`) avant d'écrire : les modifications ne touchent pas la copie de travail du projet, comme pour les sessions de l'app. Une seule session à la fois par projet : un nouveau « demande à Claude sur X » pendant qu'une session de X est `busy` échoue avec un message à l'écran.
 - Nom de session « <Projet> – <début du prompt> ».

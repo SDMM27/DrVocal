@@ -36,11 +36,11 @@
 
 But : figer les valeurs dont dépendent les tâches suivantes. À faire dans `D:/NasaCode/DrVocal`, puis noter les résultats en bas de ce plan, section « Résultats de l'essai ».
 
-- [ ] **Step 1 : session bloquée.** `claude --bg --permission-mode manual -n "Essai bloque" "Crée le fichier essai.txt contenant OK"`. Pendant qu'elle attend l'autorisation, relever les champs `status` et `state` dans `claude agents --json`. Les noter comme `WAITING` (états vivants qui ne travaillent pas).
-- [ ] **Step 2 : états de travail.** Relever `status` / `state` d'une session qui travaille (`busy` / `working` dans l'essai du 2026-11-09) et d'une session finie (`idle`). Noter `WORKING`.
-- [ ] **Step 3 : reprise.** `claude stop <id>`, puis `claude --bg --permission-mode auto --resume <UUID> -- "Réponds juste OK2"`. Noter si `--` est accepté, si l'identifiant court et l'UUID restent les mêmes, et la ligne exacte affichée.
-- [ ] **Step 4 : import d'une session arrêtée.** `claude stop <id>`, puis ouvrir `claude://resume?session=<UUID>`. Vérifier qu'elle apparaît dans l'app avec les deux tours.
-- [ ] **Step 5 : nettoyage.** `claude stop`, puis archiver les sessions d'essai dans l'app ; supprimer `essai.txt` s'il existe.
+- [x] **Step 1 : session bloquée.** `claude --bg --permission-mode manual -n "Essai bloque" "Crée le fichier essai.txt contenant OK"`. Pendant qu'elle attend l'autorisation, relever les champs `status` et `state` dans `claude agents --json`. Les noter comme `WAITING` (états vivants qui ne travaillent pas).
+- [x] **Step 2 : états de travail.** Relever `status` / `state` d'une session qui travaille (`busy` / `working` dans l'essai du 2026-11-09) et d'une session finie (`idle`). Noter `WORKING`.
+- [x] **Step 3 : reprise.** `claude stop <id>`, puis `claude --bg --permission-mode auto --resume <UUID> -- "Réponds juste OK2"`. Noter si `--` est accepté, si l'identifiant court et l'UUID restent les mêmes, et la ligne exacte affichée.
+- [x] **Step 4 : import d'une session arrêtée.** `claude stop <id>`, puis ouvrir `claude://resume?session=<UUID>`. Vérifier qu'elle apparaît dans l'app avec les deux tours.
+- [x] **Step 5 : nettoyage.** `claude stop`, puis archiver les sessions d'essai dans l'app ; supprimer `essai.txt` s'il existe.
 
 ### Task 2: Déplacer la validation des dossiers de projet
 
@@ -70,7 +70,7 @@ But : figer les valeurs dont dépendent les tâches suivantes. À faire dans `D:
   - `def parse_agents(output: str) -> list[AgentInfo]` : seulement les entrées `kind == "background"`. Lève `ClaudeCliError` si la sortie n'est pas un tableau JSON.
   - `def session_name(project: str, prompt: str) -> str` : « <Projet> – <prompt> » coupé à 50 caractères (coupure sur un mot si possible, sans espace final).
   - `class ClaudeCli:` `__init__(self, exe: str, run: Runner = _run)` où `Runner = Callable[[list[str], Path | None, float], Awaitable[tuple[int, str]]]` (arguments, dossier, délai : code de retour et sortie fusionnée stdout+stderr).
-    - `async def launch(self, cwd: Path, name: str, prompt: str, resume: str | None = None) -> str` : renvoie l'identifiant court. Arguments : `[exe, "--bg", "--permission-mode", "auto", "-n", name]`, plus `["--resume", resume]` si besoin, puis le prompt (précédé de `"--"` si la tâche 1 l'a validé). Délai : 30 s.
+    - `async def launch(self, cwd: Path, name: str, prompt: str, resume: str | None = None) -> str` : renvoie l'identifiant court. Arguments : nouvelle session `[exe, "--bg", "--permission-mode", "auto", "-n", name, "--", prompt]` ; reprise `[exe, "--bg", "--resume", resume, "--", prompt]`, sans aucune autre option (voir « Résultats de l'essai »). Délai : 30 s.
     - `async def agents(self) -> list[AgentInfo]` : `[exe, "agents", "--json"]`.
     - `async def stop(self, short_id: str) -> None` : `[exe, "stop", short_id]`.
     - `def open_import(self, uuid: str) -> None` : `os.startfile(f"claude://resume?session={uuid}")`. L'UUID est validé par une expression régulière d'UUID avant l'appel ; sinon `ClaudeCliError`.
@@ -228,7 +228,7 @@ def test_open_import_refuses_a_non_uuid(monkeypatch):  # os.startfile jamais app
   - **Présentation** (ligne 12) : « **Claude Code** (facultatif) : un prompt dicté lance une session Claude Code en arrière-plan, sur ton abonnement, dans le dossier d'un projet que tu nommes ; « importe mes sessions Claude » les ouvre ensuite dans l'app Claude. »
   - **Prérequis** : à la place de la clé API, Claude Code installé et connecté (`claude` dans le PATH, sinon `claude_command`), et chaque projet ouvert une fois dans Claude Code pour qu'il soit de confiance.
   - **Section commandes** : ajouter « importe mes sessions Claude ».
-  - **« Deuxième écran et sessions Claude »** : mode auto, une session à la fois par projet, bip « Claude a fini » (aussi quand Claude attend ta réponse), import à la demande seulement (il ouvre l'app), on ne continue pas à la voix une session déjà importée.
+  - **« Deuxième écran et sessions Claude »** : mode auto, une session à la fois par projet, bip « Claude a fini » (aussi quand Claude attend ta réponse), import à la demande seulement (il ouvre l'app), on ne continue pas à la voix une session déjà importée. Claude Code travaille dans son propre worktree (branche `worktree-<nom>`) : les changements se retrouvent dans la session importée, pas directement dans la copie de travail.
   - **À supprimer** : clé API, limites (30 tours, 2 dollars, 15 minutes), politique d'autorisations, « Répondre à Claude ».
   - **Journal des commandes** : la phrase sur les réponses à Claude disparaît.
 - [ ] Step 3 : `uv sync`, puis ruff, pyright et pytest au vert.
@@ -243,4 +243,16 @@ def test_open_import_refuses_a_non_uuid(monkeypatch):  # os.startfile jamais app
 
 ## Résultats de l'essai (tâche 1)
 
-À remplir : `WORKING`, `WAITING`, reprise (même identifiant ou non, `--` accepté ou non), import d'une session arrêtée.
+Relevé le 2026-11-09 avec `claude` 2.1.286. Ces valeurs priment sur le texte des tâches.
+
+- **`claude agents --json`** (sessions actives seulement ; `--all` ajoute celles qui sont terminées) :
+  - en travail : `status="busy"`, `state="working"` ; donc `WORKING = {("busy", "working")}` ;
+  - tour fini : `status="idle"`, `state="done"` ;
+  - bloquée sur une autorisation : `status="waiting"`, `state="blocked"`, avec en plus `waitingFor="permission prompt"` ;
+  - arrêtée : absente sans `--all`.
+- **`--`** est accepté avant le prompt : `claude --bg … -n <nom> -- "<prompt>"`.
+- **Ligne de lancement** : `backgrounded · <id>` ou `backgrounded · <id> · <nom>`. Le nom est facultatif, et Claude Code peut retitrer la session.
+- **Reprise** : `claude --bg --resume <UUID> -- "<prompt>"` **sans aucune autre option** garde le même identifiant et réutilise les options enregistrées (`--permission-mode auto` compris). Avec une option en plus (`--permission-mode` par exemple), la CLI crée une **copie** sous un nouvel identifiant. Donc `launch(..., resume=uuid)` ne passe ni `--permission-mode` ni `-n`.
+- **Import** : `claude://resume?session=<UUID>` importe aussi une session arrêtée ; elle apparaît dans l'app sous son nom.
+- **Worktree** : avant d'écrire, une session d'arrière-plan se crée **d'elle-même** un worktree `.claude/worktrees/<nom>`, sur une branche `worktree-<nom>`. Les modifications de Claude n'arrivent donc pas directement dans la copie de travail du projet. On le retrouve dans l'app, comme pour les autres sessions.
+- `claude rm <id>` supprime l'état de la session et son worktree.
