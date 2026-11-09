@@ -47,6 +47,7 @@ class WakeDetector:
         patience: int = 2,
         confirm: Callable[[list[np.ndarray]], bool] | None = None,
         confirm_window_s: float = 1.6,
+        on_rejected: Callable[[float], None] | None = None,
     ) -> None:
         self._paths = list(model_paths)
         self._threshold = threshold
@@ -56,6 +57,7 @@ class WakeDetector:
         self._patience = patience
         self._above = 0
         self._confirm = confirm
+        self._on_rejected = on_rejected
         self._recent: deque[np.ndarray] = deque(maxlen=math.ceil(confirm_window_s * 1000 / FRAME_MS))
 
     def _load(self) -> Any:
@@ -78,6 +80,11 @@ class WakeDetector:
             self._cooldown_left = self._cooldown_frames  # aussi apres un rejet : pas de verification a chaque trame
             if self._confirm is not None and not self._confirm(list(self._recent)):
                 log.info("reveil ecarte : pas de parole (score %.2f)", score)
+                if self._on_rejected is not None:
+                    try:
+                        self._on_rejected(score)
+                    except Exception:
+                        log.exception("rappel de reveil ecarte en erreur")
                 return False
             log.info("reveil (score %.2f)", score)
             return True

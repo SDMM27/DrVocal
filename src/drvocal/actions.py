@@ -22,6 +22,7 @@ ACTION_NAMES = frozenset({
     "discord.move_self",
     "discord.mute_member",
     "notes.start",
+    "journal.open",
     "claude.prompt",
     "claude.continue",
     "claude.stop",

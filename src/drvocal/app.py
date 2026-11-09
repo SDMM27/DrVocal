@@ -197,6 +197,7 @@ class Assistant:
         speaker: Any,
         notify: Callable[[str], None] | None = None,
         command_log: Callable[..., None] | None = None,
+        event_log: Callable[..., None] | None = None,
     ) -> None:
         self._ears = ears
         self._detector = detector
@@ -207,6 +208,7 @@ class Assistant:
         self._speaker = speaker  # jamais utilise pour repondre : pas de voix par defaut
         self._notify = notify
         self._command_log = command_log
+        self._event_log = event_log
         self._waking = False
         self._restart = asyncio.Event()
         self._tasks: set[asyncio.Task] = set()
@@ -265,6 +267,7 @@ class Assistant:
                 log.info("commande recommencee")
                 self._player.play("wake")
             if text is None:
+                await self._journal_event("no_speech")
                 return  # faux reveil : retour en veille, sans son
             # copie tout de suite : une action Discord reecoute plus tard et ecraserait ces attributs
             audio, stt_ms = self._ears.last_audio, self._ears.last_stt_ms
@@ -281,13 +284,22 @@ class Assistant:
             self._waking = False
 
     async def _journal(self, text: str, intent: Intent | None, ok: bool | None, audio: np.ndarray | None,
-                       stt_ms: int | None, action_ms: int | None) -> None:
+                       stt_ms: int | None, action_ms: int | None, reply: str | None = None) -> None:
         if self._command_log is None:
             return
+        extra = {"reply": reply} if reply is not None else {}
         try:
-            await asyncio.to_thread(self._command_log, text, intent, ok, audio, stt_ms, action_ms)
+            await asyncio.to_thread(self._command_log, text, intent, ok, audio, stt_ms, action_ms, **extra)
         except Exception:
             log.exception("journal des commandes en erreur")
+
+    async def _journal_event(self, kind: str) -> None:
+        if self._event_log is None:
+            return
+        try:
+            await asyncio.to_thread(self._event_log, kind)
+        except Exception:
+            log.exception("journal des evenements en erreur")
 
     async def _run_action(self, intent: Intent, text: str = "", audio: np.ndarray | None = None,
                           stt_ms: int | None = None) -> None:
@@ -298,7 +310,7 @@ class Assistant:
             log.exception("action %s en erreur", intent.action)
             outcome = Outcome(False)
         action_ms = round((time.perf_counter() - start) * 1000)
-        await self._journal(text, intent, outcome.ok, audio, stt_ms, action_ms)
+        await self._journal(text, intent, outcome.ok, audio, stt_ms, action_ms, outcome.speak)
         self._player.play("success" if outcome.ok else "failure")
         if outcome.speak:
             log.info("%s : %s", intent.action, outcome.speak)

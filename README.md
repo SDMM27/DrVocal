@@ -228,6 +228,8 @@ Les commandes sont analysées par des règles (accents et majuscules ignorés), 
   - « mute Alex », « coupe le micro de Alex », « rends muet Alex » (mute serveur)
 - **Notes**
   - « prends une note », « fais une note », « écris une note » : dicte ensuite ta note ; le silence de fin est plus long (2,5 s). La note est écrite mot pour mot dans `notes_dir`, sous la forme `AAAA-MM-JJ_HH-MM-SS.txt`.
+- **Journal**
+  - « ouvre le journal », « montre le journal », « affiche le journal », « montre-moi le journal », « ouvre le journal de Dr Vocal » : ouvre la fenêtre du journal (voir plus bas).
 - **Claude Agent** (seulement si une clé API est fournie)
   - « demande à Claude sur Dr Vocal de lancer les tests » (prépositions acceptées : `sur`, `dans`, `pour`, `avec`)
   - « continue avec Claude pour ajouter un test » : reprend la session en cours
@@ -269,6 +271,19 @@ uv run python tools/replay_commands.py --no-hotwords   # sans vocabulaire, pour 
 ```
 
 `stt_vocabulary` (liste de noms propres, par exemple `["Dr Vocal", "Daft Punk"]`) aide la transcription à reconnaître des noms mal compris. Ces termes passent avant ceux tirés automatiquement des projets, des salons et membres Discord et de Spotify (~400 caractères au total). `stt_hotwords = false` désactive tout le vocabulaire.
+
+### Fenêtre du journal
+
+La fenêtre « Dr Vocal — journal » affiche en tableau, en lecture seule, ce que Dr Vocal a entendu, compris et fait (les 500 dernières lignes, rafraîchies toutes les 2 s). Pour l'ouvrir : dire « ouvre le journal », ou utiliser un raccourci sur le bureau, créé par :
+
+```powershell
+uv run python tools/install_journal_shortcut.py
+uv run python tools/install_journal_shortcut.py --remove   # retire le raccourci
+```
+
+Le raccourci `Journal Dr Vocal` lance `.venv\Scripts\pythonw.exe -m drvocal.journal` : lancer d'abord `uv sync`. Une seule fenêtre à la fois.
+
+Les filtres en haut : **Tout**, **Pas compris** (phrase entendue mais aucune action reconnue), **Échecs** (action reconnue mais échouée) et **Faux réveils** (réveil écarté faute de parole, ou réveil sans rien entendre ensuite). Le bouton ▶ réécoute l'audio des commandes non comprises ou échouées. Sans `command_log`, le journal reste vide.
 
 ## Lancement au démarrage de Windows
 

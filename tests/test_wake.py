@@ -87,6 +87,28 @@ def test_confirm_rejects_wake_without_speech():
     assert seen == [2]  # les trames recentes, une seule verification (delai de reprise)
 
 
+def test_rejected_wake_calls_on_rejected_with_score():
+    scores = []
+    d = WakeDetector([], 0.5, model=FakeModel([0.9, 0.9]), confirm=lambda fr: False, on_rejected=scores.append)
+    assert run(d, 2) == [False, False]
+    assert scores == [0.9]
+
+
+def test_accepted_wake_does_not_call_on_rejected():
+    scores = []
+    d = WakeDetector([], 0.5, model=FakeModel([0.9, 0.9]), confirm=lambda fr: True, on_rejected=scores.append)
+    assert run(d, 2) == [False, True]
+    assert scores == []
+
+
+def test_failing_on_rejected_is_swallowed():
+    def boom(score):
+        raise RuntimeError("disque plein")
+
+    d = WakeDetector([], 0.5, model=FakeModel([0.9, 0.9]), confirm=lambda fr: False, on_rejected=boom)
+    assert run(d, 2) == [False, False]
+
+
 def test_confirm_accepts_wake_with_speech():
     d = WakeDetector([], 0.5, model=FakeModel([0.9, 0.9]), confirm=lambda fr: True)
     assert run(d, 2) == [False, True]

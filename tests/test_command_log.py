@@ -30,7 +30,7 @@ def test_line_is_written_and_readable_with_accents(tmp_path):
     log.record("mets Beyoncé", Intent("spotify.play", {"query": "Beyoncé"}), True, AUDIO, 900, 120)
     [row] = lines(tmp_path / "commands.jsonl")
     assert row == {"ts": "2026-11-04T12:00:01", "text": "mets Beyoncé", "action": "spotify.play",
-                   "args": {"query": "Beyoncé"}, "ok": True, "stt_ms": 900, "action_ms": 120, "wav": None}
+                   "args": {"query": "Beyoncé"}, "ok": True, "stt_ms": 900, "action_ms": 120, "wav": None, "reply": None}
     assert "Beyoncé" in (tmp_path / "commands.jsonl").read_text(encoding="utf-8")
 
 
@@ -67,3 +67,33 @@ def test_os_error_is_swallowed(tmp_path):
     blocker = tmp_path / "pas_un_dossier"
     blocker.write_text("x")
     CommandLog(blocker / "sub", now=clock()).record("a", None, None, AUDIO, 1, None)
+
+
+def test_reply_is_written(tmp_path):
+    log = CommandLog(tmp_path, now=clock())
+    log.record("mets X", Intent("spotify.play", {}), False, None, 1, 2, reply="Je n'ai pas trouvé X")
+    [row] = lines(tmp_path / "commands.jsonl")
+    assert row["reply"] == "Je n'ai pas trouvé X"
+
+
+def test_record_event_writes_a_line(tmp_path):
+    log = CommandLog(tmp_path, now=clock())
+    log.record_event("wake_rejected", score=0.91)
+    log.record_event("no_speech")
+    assert lines(tmp_path / "commands.jsonl") == [
+        {"ts": "2026-11-04T12:00:01", "event": "wake_rejected", "score": 0.91},
+        {"ts": "2026-11-04T12:00:02", "event": "no_speech"}]
+
+
+def test_record_event_rotates_like_record(tmp_path):
+    log = CommandLog(tmp_path, max_bytes=100, now=clock())
+    for _ in range(4):
+        log.record_event("no_speech")
+    assert (tmp_path / "commands.1.jsonl").exists()
+    assert len(lines(tmp_path / "commands.jsonl")) < 4
+
+
+def test_record_event_never_raises_on_oserror(tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    CommandLog(blocker / "sub").record_event("no_speech")  # le dossier ne peut pas etre cree

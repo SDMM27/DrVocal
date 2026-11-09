@@ -76,6 +76,7 @@ async def amain(settings: Settings, screen) -> None:
     from drvocal.audio.vad import SileroVAD
     from drvocal.claude_session import ClaudeRunner, SessionEvent
     from drvocal.intent import parse
+    from drvocal.journal import register_journal
 
     loop = asyncio.get_running_loop()
     timings = Timings()
@@ -101,6 +102,15 @@ async def amain(settings: Settings, screen) -> None:
         captures = data_dir() / "captures"
     ears = Ears(MicStream().frames(), transcriber.transcribe, fresh_vad, captures)
 
+    command_log = event_log = on_rejected = None
+    if settings.command_log:
+        from drvocal.command_log import CommandLog
+
+        journal = CommandLog(data_dir() / "commands")
+        command_log = journal.record
+        event_log = journal.record_event
+        on_rejected = lambda score: journal.record_event("wake_rejected", score=round(score, 2))  # noqa: E731
+
     mode = settings.wake_mode
     models = sorted(_rooted(settings.wake_models_dir).glob("*.onnx")) if mode == "voice" else []
     if mode == "voice" and not models:
@@ -111,7 +121,8 @@ async def amain(settings: Settings, screen) -> None:
         from drvocal.audio.wake import WakeDetector
 
         # Detecteur de parole a part (celui d'Ears sert pendant l'ecoute) ; ne tourne qu'au reveil.
-        detector = WakeDetector(models, settings.wake_threshold, confirm=speech_confirmer())
+        detector = WakeDetector(models, settings.wake_threshold, confirm=speech_confirmer(),
+                                on_rejected=on_rejected)
 
         def capture_command():
             return ears.listen(timings.command_silence_ms, timings.command_no_speech_ms, timings.command_max_ms)
@@ -128,6 +139,7 @@ async def amain(settings: Settings, screen) -> None:
 
     catalogue = Catalogue()
     register_notes(catalogue, ears, settings.notes_dir, player, timings)
+    register_journal(catalogue)
     store = default_store()
 
     def claude_api_key() -> str | None:
@@ -155,14 +167,9 @@ async def amain(settings: Settings, screen) -> None:
     background.add(preload)
     preload.add_done_callback(background.discard)
 
-    command_log = None
-    if settings.command_log:
-        from drvocal.command_log import CommandLog
-
-        command_log = CommandLog(data_dir() / "commands").record
     assistant = Assistant(ears, detector, capture_command, lambda text: parse(text, settings),
                           catalogue, player, speaker, notify=lambda text: push(SessionEvent("text", text)),
-                          command_log=command_log)
+                          command_log=command_log, event_log=event_log)
     try:
         await assistant.run()
     finally:

@@ -568,3 +568,47 @@ async def test_failing_journal_does_not_break_the_command():
     await run_assistant(assistant)
     assert catalogue.ran == [Intent("spotify.pause", {})]
     assert len(journal.calls) == 1
+
+
+class Events:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.calls: list[tuple] = []
+        self.error = error
+
+    def __call__(self, kind, **fields) -> None:
+        self.calls.append((kind, fields))
+        if self.error is not None:
+            raise self.error
+
+
+async def test_false_wake_is_journaled_as_no_speech():
+    events = Events()
+    ears, _ = make_ears([WAKE, *[SILENT] * 8, *GAP])
+    assistant = Assistant(ears, Detector(), voice_capture(ears), parse, FakeCatalogue(), Player(), Speaker(),
+                          event_log=events)
+    await run_assistant(assistant)
+    assert events.calls == [("no_speech", {})]
+
+
+async def test_failing_event_log_does_not_break_the_wake():
+    events = Events(RuntimeError("disque plein"))
+    ears, _ = make_ears([WAKE, *[SILENT] * 8, *GAP])
+    player = Player()
+    assistant = Assistant(ears, Detector(), voice_capture(ears), parse, FakeCatalogue(), player, Speaker(),
+                          event_log=events)
+    await run_assistant(assistant)
+    assert len(events.calls) == 1 and player.played == ["wake"]
+
+
+async def test_reply_is_journaled():
+    calls = []
+
+    def journal(text, intent, ok, audio, stt_ms, action_ms, reply=None):
+        calls.append((ok, reply))
+
+    ears, _ = make_ears([WAKE, SPEECH, *SILENCE_END, *GAP], ["pause"])
+    assistant = Assistant(ears, Detector(), voice_capture(ears), parse,
+                          FakeCatalogue(Outcome(False, "Je n'ai pas trouvé")), Player(), Speaker(),
+                          command_log=journal)
+    await run_assistant(assistant)
+    assert calls == [(False, "Je n'ai pas trouvé")]

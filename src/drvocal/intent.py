@@ -46,6 +46,8 @@ _SIMPLE_RULES = [
     ("spotify.previous", _rx(r"^(?:musique precedente|chanson precedente|morceau precedent|precedent)$")),
     ("spotify.undo", _rx(r"^(?:(?:annule|annuler)(?: ca| cela| le dernier(?: ajout| like)?)?|retire~(?:le|la|ca))$")),
     ("notes.start", _rx(r"^(?:prends|prend|fais|ecris) une note$")),
+    ("journal.open", _rx(r"^(?:ouvre|ouvrir|montre|affiche|afficher)(?:~moi)? (?:le )?journal"
+                         r"(?: (?:de|du) (?:dr\.?|docteur|doc)~?vocal)?$")),
     ("claude.stop", _rx(r"^(?:arrete|arretes|stop|stoppe|annule|coupe|termine) (?:la |cette )?(?:session )?(?:de )?"
                         r"claude(?: agent)?$")),
 ]

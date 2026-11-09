@@ -27,7 +27,7 @@ class CommandLog:
         self._now = now
 
     def record(self, text: str, intent: Intent | None, ok: bool | None, audio: np.ndarray | None,
-               stt_ms: int | None, action_ms: int | None) -> None:
+               stt_ms: int | None, action_ms: int | None, reply: str | None = None) -> None:
         try:
             self._dir.mkdir(parents=True, exist_ok=True)
             when = self._now()
@@ -43,14 +43,26 @@ class CommandLog:
                 "stt_ms": stt_ms,
                 "action_ms": action_ms,
                 "wav": wav,
+                "reply": reply,
             }
-            path = self._dir / "commands.jsonl"
-            if path.exists() and path.stat().st_size > self._max_bytes:
-                path.replace(self._dir / "commands.1.jsonl")
-            with path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(line, ensure_ascii=False) + "\n")
+            self._append(line)
         except OSError:
             log.exception("journal des commandes impossible")
+
+    def record_event(self, kind: str, **fields: object) -> None:
+        """Evenement hors commande (reveil ecarte, rien entendu) dans le meme fichier."""
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            self._append({"ts": self._now().isoformat(timespec="seconds"), "event": kind, **fields})
+        except OSError:
+            log.exception("journal des commandes impossible")
+
+    def _append(self, line: dict) -> None:
+        path = self._dir / "commands.jsonl"
+        if path.exists() and path.stat().st_size > self._max_bytes:
+            path.replace(self._dir / "commands.1.jsonl")
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
 
     def _write_wav(self, audio: np.ndarray, when: datetime) -> str:
         failures = self._dir / "failures"

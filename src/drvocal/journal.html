@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Dr Vocal — journal</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1d2127; --muted: #6b7280; --line: #e5e7eb; --chip: #f1f3f5; --chip-on: #1d2127;
+    --chip-on-fg: #ffffff; --ok: #1a8f3c; --ko: #d12f2f; --warn: #d97706; --head: #f8f9fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --fg: #e6e6e6; --muted: #9aa0aa; --line: #2b2f36; --chip: #23272e; --chip-on: #e6e6e6;
+      --chip-on-fg: #14161a; --ok: #5cc46b; --ko: #ff6b6b; --warn: #ffb454; --head: #1b1e23;
+    }
+  }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 "Segoe UI", sans-serif; }
+  #bar { position: sticky; top: 0; background: var(--bg); padding: 10px 14px; border-bottom: 1px solid var(--line); z-index: 2; }
+  .chip { font: inherit; border: 0; border-radius: 999px; padding: 4px 12px; margin-right: 6px; background: var(--chip);
+          color: var(--fg); cursor: pointer; }
+  .chip.on { background: var(--chip-on); color: var(--chip-on-fg); }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; background: var(--head); color: var(--muted); font-weight: 600; padding: 6px 14px; position: sticky; top: 45px; }
+  td { padding: 6px 14px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+  td.time { white-space: nowrap; color: var(--muted); width: 1%; }
+  td.action { white-space: nowrap; width: 1%; }
+  td.result { white-space: nowrap; width: 1%; text-align: center; font-weight: 700; }
+  .reply { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .event td { color: var(--muted); font-style: italic; }
+  .r-ok { color: var(--ok); } .r-failed { color: var(--ko); } .r-not_understood { color: var(--warn); }
+  .play { font: inherit; border: 0; background: none; cursor: pointer; color: var(--fg); padding: 0 6px 0 0; }
+  #empty { padding: 24px 14px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="bar"></div>
+<table>
+  <thead><tr><th>Heure</th><th>Entendu</th><th>Action</th><th>Résultat</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+<div id="empty" hidden>Rien à afficher.</div>
+<script>
+(function () {
+  var LABELS = {
+    "spotify.play": "lecture", "spotify.pause": "pause", "spotify.resume": "reprise", "spotify.next": "suivant",
+    "spotify.previous": "précédent", "spotify.volume": "volume", "spotify.dj": "DJ", "spotify.remember": "mémorisation",
+    "spotify.like": "like", "spotify.add_to_playlist": "ajout playlist", "spotify.undo": "annulation",
+    "discord.mute_self": "micro coupé", "discord.deafen_self": "sourdine", "discord.message": "message Discord",
+    "discord.move_self": "changement de salon", "discord.mute_member": "membre muet",
+    "notes.start": "note", "journal.open": "journal", "claude.prompt": "Claude", "claude.continue": "Claude (suite)",
+    "claude.stop": "arrêt de Claude"
+  };
+  var FILTERS = [
+    ["all", "Tout", function () { return true; }],
+    ["not_understood", "Pas compris", function (e) { return e.kind === "not_understood"; }],
+    ["failed", "Échecs", function (e) { return e.kind === "failed"; }],
+    ["false_wake", "Faux réveils", function (e) { return e.kind === "wake_rejected" || e.kind === "no_speech"; }]
+  ];
+  var RESULT = { ok: "✓", failed: "✗", not_understood: "?" };
+  var current = "all";
+  var entries = [];
+  var bar = document.getElementById("bar");
+  var rows = document.getElementById("rows");
+  var empty = document.getElementById("empty");
+
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+
+  function formatTime(ts) {
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) return String(ts || "");
+    var hm = pad(d.getHours()) + ":" + pad(d.getMinutes());
+    var now = new Date();
+    if (d.toDateString() === now.toDateString()) return hm;
+    return pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + " " + hm;
+  }
+
+  function cell(tr, cls, text) {
+    var td = document.createElement("td");
+    if (cls) td.className = cls;
+    if (text !== undefined) td.textContent = text;
+    tr.appendChild(td);
+    return td;
+  }
+
+  function eventText(e) {
+    if (e.kind === "wake_rejected") {
+      var score = typeof e.score === "number" ? " (score " + e.score.toFixed(2).replace(".", ",") + ")" : "";
+      return "réveil écarté : pas de parole" + score;
+    }
+    return "réveillé, mais rien entendu";
+  }
+
+  function play(name) {
+    if (window.pywebview && window.pywebview.api) window.pywebview.api.play(name);
+  }
+
+  function renderRow(e) {
+    var tr = document.createElement("tr");
+    var isEvent = e.kind === "wake_rejected" || e.kind === "no_speech";
+    if (isEvent) tr.className = "event";
+    cell(tr, "time", formatTime(e.ts));
+    if (isEvent) {
+      var td = cell(tr, "", eventText(e));
+      td.colSpan = 3;
+      return tr;
+    }
+    var heard = cell(tr, "");
+    if (e.wav) {
+      var b = document.createElement("button");
+      b.type = "button"; b.className = "play"; b.title = "Réécouter"; b.textContent = "▶";
+      b.addEventListener("click", function () { play(e.wav); });
+      heard.appendChild(b);
+    }
+    heard.appendChild(document.createTextNode("“" + (e.text || "") + "”"));
+    if (e.reply) {
+      var r = document.createElement("div");
+      r.className = "reply"; r.textContent = e.reply;
+      heard.appendChild(r);
+    }
+    cell(tr, "action", e.action ? (LABELS[e.action] || e.action) : "—");
+    cell(tr, "result r-" + e.kind, RESULT[e.kind] || "");
+    return tr;
+  }
+
+  function counts() {
+    return FILTERS.map(function (f) { return entries.filter(f[2]).length; });
+  }
+
+  function renderBar() {
+    var c = counts();
+    bar.textContent = "";
+    FILTERS.forEach(function (f, i) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip" + (f[0] === current ? " on" : "");
+      b.textContent = f[1] + " " + c[i];
+      b.addEventListener("click", function () { current = f[0]; render(); });
+      bar.appendChild(b);
+    });
+  }
+
+  function render() {
+    var scroll = window.scrollY;
+    var test = FILTERS.filter(function (f) { return f[0] === current; })[0][2];
+    var shown = entries.filter(test);
+    renderBar();
+    rows.textContent = "";
+    shown.forEach(function (e) { rows.appendChild(renderRow(e)); });
+    empty.hidden = shown.length > 0;
+    window.scrollTo(0, scroll);
+  }
+
+  function refresh() {
+    if (!(window.pywebview && window.pywebview.api)) return;
+    window.pywebview.api.entries().then(function (list) {
+      if (JSON.stringify(list) === JSON.stringify(entries)) return;  // rien de neuf : pas de redessin
+      entries = list;
+      render();
+    }).catch(function () {});
+  }
+
+  render();
+  var started = false;
+  function start() {
+    if (started) return;
+    started = true;
+    refresh();
+    setInterval(refresh, 2000);
+  }
+  window.addEventListener("pywebviewready", start);
+  if (window.pywebview && window.pywebview.api) start();
+})();
+</script>
+</body>
+</html>
