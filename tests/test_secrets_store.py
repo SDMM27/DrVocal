@@ -14,11 +14,11 @@ def test_set_get_roundtrip_and_file_is_encrypted(tmp_path):
 
 def test_missing_returns_none_and_delete_is_idempotent(tmp_path):
     store = SecretStore(tmp_path)
-    assert store.get("claude_api_key") is None
-    store.set("claude_api_key", "x")
-    store.delete("claude_api_key")
-    store.delete("claude_api_key")
-    assert store.get("claude_api_key") is None
+    assert store.get("spotify_client_id") is None
+    store.set("spotify_client_id", "x")
+    store.delete("spotify_client_id")
+    store.delete("spotify_client_id")
+    assert store.get("spotify_client_id") is None
 
 
 def test_set_overwrites(tmp_path):

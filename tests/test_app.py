@@ -10,14 +10,10 @@ from drvocal.app import (
     Ears,
     Timings,
     after_wake_phrase,
-    make_ask_user,
-    make_event_handler,
     register_claude,
     register_notes,
 )
 from drvocal.audio.mic import FRAME_SAMPLES
-from drvocal.claude_policy import Reply
-from drvocal.claude_session import SessionEvent
 from drvocal.intent import Intent
 
 SILENT, SPEECH, WAKE = 0, 1, 2  # marqueur place dans le premier echantillon de chaque trame
@@ -426,29 +422,6 @@ class FakeListener:
         return self.answer
 
 
-async def test_claude_question_listens_without_wake():
-    timings = Timings()
-    ears, speaker = FakeListener("Le projet Alpha"), Speaker()
-    ask = make_ask_user(ears, speaker, timings)
-    assert await ask("Quel projet ?", "question") == "Le projet Alpha"
-    assert speaker.said == ["Quel projet ?"]
-    assert ears.calls == [(900, 8000, 15000)]
-    assert await make_ask_user(FakeListener(None), Speaker(), timings)("Et ?", "question") == ""
-
-
-@pytest.mark.parametrize("said, expected", [
-    ("oui docteur", Reply.APPROVE),
-    ("Oui, docteur !", Reply.APPROVE),
-    ("non docteur", Reply.REJECT),
-    ("oui", Reply.NONE),
-    ("oui vas-y", Reply.NONE),
-    (None, Reply.NONE),
-])
-async def test_approval_requires_exact_phrase(said, expected):
-    ask = make_ask_user(FakeListener(said), Speaker(), Timings())
-    assert await ask("Autoriser ?", "approval") is expected
-
-
 class FakeVoice:
     def __init__(self, result: bool = True):
         self.result = result
@@ -512,15 +485,6 @@ async def test_empty_note_is_a_failure(tmp_path):
     register_notes(catalogue, FakeListener(None), tmp_path, Player(), Timings())
     assert (await catalogue.run(Intent("notes.start", {}))).ok is False
     assert list(tmp_path.iterdir()) == []
-
-
-def test_event_handler_sounds_and_push():
-    player, pushed = Player(), []
-    on_event = make_event_handler(player, pushed.append)
-    for kind in ("text", "tool", "pending", "done", "error"):
-        on_event(SessionEvent(kind, "x"))
-    assert player.played == ["done", "failure"]
-    assert len(pushed) == 5
 
 
 async def test_listen_keeps_debug_capture_including_silent_ones(tmp_path):

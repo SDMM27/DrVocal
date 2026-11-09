@@ -1,6 +1,6 @@
 # Dr Vocal
 
-Assistant vocal local, en français, pour joueur PC sous Windows 11. Il se pilote à la voix pendant une partie, sans alt-tab : Spotify, Discord, prise de notes et sessions Claude Agent (facultatif). Usage personnel, un seul utilisateur.
+Assistant vocal local, en français, pour joueur PC sous Windows 11. Il se pilote à la voix pendant une partie, sans alt-tab : Spotify, Discord, prise de notes et sessions Claude Code (facultatif). Usage personnel, un seul utilisateur.
 
 La conception complète (objectifs, anti-objectifs, décisions) est dans `docs/superpowers/specs/2026-11-02-dr-vocal-design.md`.
 
@@ -9,16 +9,16 @@ La conception complète (objectifs, anti-objectifs, décisions) est dans `docs/s
 - **Spotify** (compte Premium) : lance un titre, un album, un artiste ou une playlist par son nom ; pause, reprise, suivant, précédent, volume.
 - **Discord** via un bot personnel : écrire un message dans un salon, se déplacer dans un salon vocal, muter un autre membre (mute serveur), se muter ou se mettre en sourdine.
 - **Notes** : le texte dicté est enregistré mot pour mot dans un nouveau fichier `.txt` daté.
-- **Claude Agent** (facultatif, désactivé par défaut) : un prompt dicté ouvre une session dans le dossier d'un projet que tu nommes ; la progression s'affiche sur le deuxième écran. Dr Vocal ne parle que si Claude a besoin d'une réponse ou d'une autorisation. Powered by Claude.
+- **Claude Code** (facultatif) : un prompt dicté lance une session Claude Code en arrière-plan, sur ton abonnement, dans le dossier d'un projet que tu nommes ; « importe mes sessions Claude » les ouvre ensuite dans l'app Claude.
 
-Tout est local : réveil, détection de fin de phrase, transcription (faster-whisper), compréhension (règles, sans réseau ni modèle de langage) et voix (Piper). Seules les actions Spotify, Discord et Claude Agent passent par le réseau, et seulement après un réveil.
+Tout est local : réveil, détection de fin de phrase, transcription (faster-whisper), compréhension (règles, sans réseau ni modèle de langage) et voix (Piper). Seules les actions Spotify, Discord et Claude Code passent par le réseau, et seulement après un réveil.
 
 ## Ce que Dr Vocal ne fait pas
 
 - Il ne supprime aucun fichier et ne ferme ni le jeu ni Discord : ces actions n'existent pas dans son catalogue. Seules les actions enregistrées sont exécutables.
 - Il n'écrase jamais une note : chaque note crée un nouveau fichier.
 - Il n'écrit pas sur Discord depuis ton compte (pas de selfbot) : les messages paraissent sous le nom du bot.
-- Il ne converse pas librement : il exécute des actions, et tout échange ouvert passe par Claude.
+- Il ne converse pas librement : il exécute des actions, et tout échange ouvert passe par Claude Code.
 - Il ne parle pas par défaut, pour ne pas couvrir le jeu.
 - Il ne fonctionne que sous Windows, pour un seul utilisateur.
 - **Aucun raccourci clavier n'est simulé par défaut** (`simulated_hotkeys_enabled = false`). Simuler des touches (`SendInput`) pendant qu'un jeu est au premier plan peut être vu comme de l'automatisation par un anti-cheat (la règle de CS2 est large, et des faux positifs sont rapportés). Le risque n'est pas écarté par les sources consultées : voir `docs/anti-triche.md` avant d'activer l'option. Par défaut, tu te mutes via le bot Discord (qui doit être configuré, et tu dois être dans un salon vocal). Le mode « touche à maintenir » lit seulement l'état d'une touche et n'envoie rien au jeu.
@@ -27,7 +27,7 @@ Tout est local : réveil, détection de fin de phrase, transcription (faster-whi
 
 - Windows 11, Python 3.12 ou plus récent, [uv](https://docs.astral.sh/uv/).
 - Un micro. Le micro est partagé avec Discord : tes amis entendent ce que tu dis à Dr Vocal.
-- Facultatif, pour Claude Agent : ta propre clé API Anthropic, fournie par la variable d'environnement `ANTHROPIC_API_KEY` (le stockage chiffré des secrets viendra ensuite). Claude Agent est payant à l'usage, facturé par Anthropic sur ta clé ; il n'utilise aucun abonnement claude.ai. Sans clé, la fonction est désactivée et les commandes Claude n'existent pas. Powered by Claude.
+- Facultatif, pour Claude Code : Claude Code installé et connecté (`claude` dans le PATH, sinon `claude_command` dans `config.toml`), et chaque projet ouvert une fois dans Claude Code pour qu'il soit de confiance. Sans Claude Code, ou sans projet valide, les commandes Claude sont désactivées.
 
 ```powershell
 git clone https://github.com/SDMM27/DrVocal.git
@@ -41,7 +41,7 @@ Vérifications de développement (lancées aussi par la CI) : `uv run ruff check
 
 ### Voix Piper
 
-La voix qui lit les messages Discord et les questions de Claude n'est pas dans le dépôt. Télécharger la voix par défaut dans `models/piper` :
+La voix qui lit les messages Discord n'est pas dans le dépôt. Télécharger la voix par défaut dans `models/piper` :
 
 ```powershell
 uv run python -m piper.download_voices fr_FR-siwis-medium --data-dir models/piper
@@ -109,7 +109,7 @@ wake = "C:/Users/moi/sons/wake.wav"
 
 Noms de sons reconnus : `wake` (début d'écoute), `success`, `failure`, `done` (Claude a fini). Un nom inconnu ou un fichier illisible est journalisé et ignoré. Les chemins relatifs sont résolus depuis la racine du projet.
 
-Un projet doit figurer dans `[projects]` pour que Claude puisse y travailler ; sinon aucune session n'est lancée.
+Un projet doit figurer dans `[projects]` pour que Claude Code puisse y travailler ; sinon aucune session n'est lancée.
 
 ### Discord
 
@@ -200,11 +200,11 @@ Avec `wake_mode = "voice"`, dis « salut doc vocal » (ou la phrase de `wake_phr
 
 ### Recommencer une demande
 
-Si tu t'es trompé ou que la réponse tarde, redis le mot de réveil (en mode touche : relâche puis rappuie) pendant l'écoute ou la transcription. La demande en cours est abandonnée, le son de réveil rejoue et Dr Vocal écoute la nouvelle. En mode vocal, redire le mot de réveil en pleine phrase n'interrompt plus l'enregistrement : une fois la phrase transcrite, Dr Vocal garde ce qui suit le mot de réveil s'il le retrouve dans la transcription (et réécoute s'il n'y a rien après), sinon il garde toute la phrase, par exemple quand « Dr Vocal » est le nom d'un projet. Pendant la transcription, le mot de réveil relance toujours. En mode touche, rien ne change : rappuyer abandonne tout de suite. Pendant une dictée de note ou une réponse à Claude, le mot de réveil ne fait rien.
+Si tu t'es trompé ou que la réponse tarde, redis le mot de réveil (en mode touche : relâche puis rappuie) pendant l'écoute ou la transcription. La demande en cours est abandonnée, le son de réveil rejoue et Dr Vocal écoute la nouvelle. En mode vocal, redire le mot de réveil en pleine phrase n'interrompt plus l'enregistrement : une fois la phrase transcrite, Dr Vocal garde ce qui suit le mot de réveil s'il le retrouve dans la transcription (et réécoute s'il n'y a rien après), sinon il garde toute la phrase, par exemple quand « Dr Vocal » est le nom d'un projet. Pendant la transcription, le mot de réveil relance toujours. En mode touche, rien ne change : rappuyer abandonne tout de suite. Pendant une dictée de note, le mot de réveil ne fait rien.
 
 ### Sons de retour
 
-Réveil : double bip montant. Succès : bip aigu. Échec ou commande non comprise : bip descendant. Claude a fini : bip discret. Rien ne se dit à voix haute sauf pour un message Discord à relire et pour les questions de Claude.
+Réveil : double bip montant. Succès : bip aigu. Échec ou commande non comprise : bip descendant. Claude a fini : bip discret. Rien ne se dit à voix haute sauf pour un message Discord à relire.
 
 ### Commandes reconnues
 
@@ -230,36 +230,28 @@ Les commandes sont analysées par des règles (accents et majuscules ignorés), 
   - « prends une note », « fais une note », « écris une note » : dicte ensuite ta note ; le silence de fin est plus long (2,5 s). La note est écrite mot pour mot dans `notes_dir`, sous la forme `AAAA-MM-JJ_HH-MM-SS.txt`.
 - **Journal**
   - « ouvre le journal », « montre le journal », « affiche le journal », « montre-moi le journal », « ouvre le journal de Dr Vocal » : ouvre la fenêtre du journal (voir plus bas).
-- **Claude Agent** (seulement si une clé API est fournie)
-  - « demande à Claude sur Dr Vocal de lancer les tests » (prépositions acceptées : `sur`, `dans`, `pour`, `avec`)
-  - « continue avec Claude pour ajouter un test » : reprend la session en cours
+- **Claude Code** (seulement si Claude Code est installé et qu'un projet valide est dans `[projects]`)
+  - « demande à Claude sur Dr Vocal de lancer les tests » (prépositions acceptées : `sur`, `dans`, `pour`, `avec`) : lance une session en arrière-plan dans ce projet
+  - « continue avec Claude pour ajouter un test » : poursuit la session en cours du projet
   - « arrête Claude », « stop Claude », « arrête la session Claude » : interrompt la session en cours
+  - « importe mes sessions Claude » : ouvre dans l'app Claude les sessions lancées à la voix
 - **Synonymes** : tout énoncé entier défini dans `[synonyms]`.
 
 ### Deuxième écran et sessions Claude
 
-Une petite fenêtre, placée sur `second_screen_index` et qui ne prend jamais le focus, affiche la progression de Claude (texte, outils utilisés), les erreurs et les demandes en attente. Elle apparaît quand il y a quelque chose à montrer.
+Une petite fenêtre, placée sur `second_screen_index` et qui ne prend jamais le focus, affiche les messages de Dr Vocal et de Claude Code (« lancée », « finie », « attend ta réponse », « arrêtée », « N sessions Claude à importer »...) et les erreurs. Elle apparaît quand il y a quelque chose à montrer.
 
-Claude Agent tourne en arrière-plan dans le dossier du projet, en mode d'autorisation par défaut (jamais de mode qui contourne les autorisations), avec des limites par session : 30 tours, 2 dollars de budget, 15 minutes. Les dossiers trop sensibles (racine d'un lecteur, dossier personnel, AppData, Windows, Program Files) sont refusés comme projets. Seules les actions suivantes passent sans question :
+Les sessions Claude Code tournent en arrière-plan, sur ton abonnement, en mode auto (jamais de mode qui contourne les autorisations). Les dossiers trop sensibles (racine d'un lecteur, dossier personnel, AppData, Windows, Program Files) sont refusés comme projets, et un projet doit avoir été ouvert une fois dans Claude Code pour être de confiance : sinon le lancement échoue avec un message qui le dit.
 
-- lire, chercher et lister des fichiers dans le projet ;
-- créer ou modifier des fichiers dans le projet, hors fichiers et dossiers cachés (`.git`, `.claude`, `.vscode`...) et hors fichiers qui finissent par être exécutés (`package.json`, `pyproject.toml`, `Makefile`, scripts `.ps1`/`.bat`/`.cmd`/`.sh`, `conftest.py`, `CLAUDE.md`, `.github`, `*.csproj`...) ;
-- les listes de tâches internes de Claude.
-
-Les commandes d'un shell demandent toujours une autorisation, qui ne peut se donner que sur le deuxième écran. Seuls les outils à faible risque (recherche et lecture web, lecture hors du projet) s'autorisent à la voix. Les commandes destructives reconnues (suppressions récursives, formatage, arrêt de processus, `git reset --hard`, etc.) sont refusées d'office, sans question. Ces règles réduisent le risque sans le supprimer. Tout le reste (accès hors du projet, fichiers cachés, outils inconnus) demande une autorisation.
-
-**Répondre à Claude.** Quand Claude demande une autorisation, Dr Vocal la lit en résumé puis écoute ta réponse sans mot de réveil (jusqu'à 8 s pour commencer à parler, 15 s au plus). Pour une autorisation, seules deux phrases exactes comptent :
-
-- « oui docteur » : autorise
-- « non docteur » : refuse
-
-Tout autre énoncé, y compris un simple « oui » adressé à un ami, n'est pas une réponse. Pour une question de Claude, ta réponse est transmise telle que transcrite.
-
-Sans réponse comprise dans les 60 s, ou si l'outil est sensible (commandes, écritures) ou le résumé trop long ou sur plusieurs lignes pour être dit fidèlement, l'action n'est pas exécutée et la demande reste en attente sur le deuxième écran, avec des boutons Autoriser et Refuser à utiliser après la partie. Autoriser une demande en attente relance la session pour que Claude réessaie une seule fois.
+- **Une session à la fois par projet.** Tant qu'elle tourne, un nouveau prompt pour le même projet est refusé (« Claude travaille déjà sur... »).
+- **Bip « Claude a fini ».** Il retentit aussi quand Claude attend ta réponse. Le message correspondant s'affiche sur le deuxième écran ; Dr Vocal ne dit rien à voix haute.
+- **Import à la demande seulement.** « importe mes sessions Claude » ouvre les sessions dans l'app Claude, ce qui peut prendre le focus : cela n'arrive donc que sur cette commande vocale, jamais tout seul. Au démarrage, Dr Vocal te dit seulement combien de sessions sont à importer.
+- **Pas de reprise à la voix après l'import.** Une session déjà importée se continue dans l'app, pas avec « continue avec Claude ».
+- **Un worktree par session.** Avant d'écrire, Claude Code crée son propre worktree `.claude/worktrees/<nom>` sur une branche `worktree-<nom>` : les changements se retrouvent dans la session importée, pas directement dans la copie de travail du projet.
 
 ## Journal des commandes et vocabulaire
 
-Chaque commande dite après le réveil est notée dans `%LOCALAPPDATA%\DrVocal\commands\commands.jsonl` : date, texte transcrit, action et arguments compris (ou `null` si la commande n'a pas été comprise), succès, durée de transcription et d'action. Le texte comprend donc les messages Discord et les prompts Claude dictés dans la commande. Les dictées de notes et les réponses à Claude ne sont pas journalisées. Le WAV de la commande n'est gardé que pour un échec (non comprise ou action échouée), dans `commandsailures` (200 plus récents). Le fichier tourne à 2 Mo (`commands.1.jsonl`). Tout reste local sur ton PC.
+Chaque commande dite après le réveil est notée dans `%LOCALAPPDATA%\DrVocal\commands\commands.jsonl` : date, texte transcrit, action et arguments compris (ou `null` si la commande n'a pas été comprise), succès, durée de transcription et d'action. Le texte comprend donc les messages Discord et les prompts Claude dictés dans la commande. Les dictées de notes ne sont pas journalisées. Le WAV de la commande n'est gardé que pour un échec (non comprise ou action échouée), dans `commandsailures` (200 plus récents). Le fichier tourne à 2 Mo (`commands.1.jsonl`). Tout reste local sur ton PC.
 
 Pour le désactiver : `command_log = false` dans `config.toml`.
 

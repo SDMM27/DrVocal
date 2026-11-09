@@ -20,8 +20,6 @@ from drvocal.actions_notes import save_note
 from drvocal.audio.mic import FRAME_MS, SAMPLE_RATE
 from drvocal.audio.vad import capture_utterance
 from drvocal.audio.wake import WakeEngine
-from drvocal.claude_policy import Reply, parse_reply
-from drvocal.claude_session import SessionEvent
 from drvocal.claude_voice import ClaudeVoice
 from drvocal.intent import Intent
 
@@ -39,9 +37,6 @@ class Timings:
     note_silence_ms: int = 2500
     note_no_speech_ms: int = 6000
     note_max_ms: int = 120000
-    reply_silence_ms: int = 900
-    reply_no_speech_ms: int = 8000
-    reply_max_ms: int = 15000
     key_max_ms: int = 15000
 
 
@@ -408,31 +403,3 @@ def register_claude(catalogue: Catalogue, voice: ClaudeVoice | None) -> None:
     catalogue.register("claude.continue", proceed)
     catalogue.register("claude.stop", stop)
     catalogue.register("claude.import", import_all)
-
-
-def make_ask_user(ears: Ears, speaker: Any, timings: Timings) -> Callable[[str, str], Awaitable[Reply | str]]:
-    async def ask_user(text: str, kind: str) -> Reply | str:
-        await speaker.say(text)
-        reply = await ears.listen(timings.reply_silence_ms, timings.reply_no_speech_ms, timings.reply_max_ms)
-        if kind == "approval":
-            return parse_reply(reply or "")
-        return reply or ""
-
-    return ask_user
-
-
-def make_event_handler(
-    player: Any, push: Callable[[SessionEvent], None] | None = None
-) -> Callable[[SessionEvent], None]:
-    def on_event(event: SessionEvent) -> None:
-        if event.kind == "done":
-            player.play("done")
-        elif event.kind == "error":
-            player.play("failure")
-        if push is not None:
-            try:
-                push(event)
-            except Exception:
-                log.exception("affichage de l'evenement impossible")
-
-    return on_event

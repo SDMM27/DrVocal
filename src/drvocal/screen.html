@@ -9,18 +9,11 @@
   #log { padding: 8px 12px; }
   .ev { margin: 6px 0; padding: 6px 10px; border-left: 3px solid #555; white-space: pre-wrap; overflow-wrap: anywhere; }
   .text { border-color: #6aa9ff; }
-  .tool { border-color: #888; color: #aaa; font-family: Consolas, monospace; font-size: 13px; }
-  .pending { border-color: #ffb454; background: #2a2418; }
-  .pending.resolved { opacity: .5; }
   .done { border-color: #5cc46b; }
   .error { border-color: #ff6b6b; color: #ffb3b3; }
-  .actions { margin-top: 6px; }
-  button { font: inherit; padding: 6px 16px; margin-right: 8px; border: 0; border-radius: 4px; cursor: pointer; color: #111; }
-  button[data-action="approve"] { background: #5cc46b; }
-  button[data-action="reject"] { background: #ff6b6b; }
-  #close { position: fixed; top: 8px; right: 12px; background: #3a3f4b; color: #e6e6e6; z-index: 10; margin: 0; }
+  button { font: inherit; padding: 6px 16px; border: 0; border-radius: 4px; cursor: pointer; }
+  #close { position: fixed; top: 8px; right: 12px; background: #3a3f4b; color: #e6e6e6; z-index: 10; }
   #log { padding-top: 44px; }
-  button:disabled { opacity: .4; cursor: default; }
 </style>
 </head>
 <body>
@@ -37,43 +30,12 @@
     var node = div.firstElementChild;
     if (!node) return;
     log.appendChild(node);
-    // Ne jamais supprimer une demande non traitee : on retire le plus ancien element sans cet etat.
-    while (log.children.length > MAX) {
-      var victim = null;
-      for (var i = 0; i < log.children.length; i++) {
-        var c = log.children[i];
-        if (!(c.classList.contains("pending") && !c.classList.contains("resolved"))) { victim = c; break; }
-      }
-      if (!victim) break;
-      log.removeChild(victim);
-    }
+    while (log.children.length > MAX) log.removeChild(log.firstChild);
     window.scrollTo(0, document.body.scrollHeight);
-  };
-  window.markResolved = function (payload) {
-    var nodes = log.querySelectorAll(".pending");
-    for (var i = 0; i < nodes.length; i++) {
-      if (nodes[i].getAttribute("data-id") === payload.id) {
-        nodes[i].classList.add("resolved");
-        var btns = nodes[i].querySelectorAll("button");
-        for (var j = 0; j < btns.length; j++) btns[j].disabled = true;
-      }
-    }
   };
   document.getElementById("close").addEventListener("click", function (e) {
     if (!e.isTrusted) return;
     if (window.pywebview && window.pywebview.api) window.pywebview.api.hide_window();
-  });
-  log.addEventListener("click", function (e) {
-    if (!e.isTrusted) return;  // seulement un vrai clic, jamais un clic simule par script
-    var btn = e.target.closest ? e.target.closest("button[data-action]") : null;
-    if (!btn || btn.disabled) return;
-    var item = btn.closest(".pending");
-    if (!item || !window.pywebview || !window.pywebview.api) return;
-    var id = item.getAttribute("data-id");
-    var action = btn.getAttribute("data-action");
-    var btns = item.querySelectorAll("button");
-    for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
-    window.pywebview.api.decide(id, action);
   });
 })();
 </script>

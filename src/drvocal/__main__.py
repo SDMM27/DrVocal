@@ -72,7 +72,7 @@ async def amain(settings: Settings, screen) -> None:
     from drvocal.audio.stt import Transcriber
     from drvocal.audio.tts import Speaker
     from drvocal.audio.vad import SileroVAD
-    from drvocal.claude_session import SessionEvent
+    from drvocal.events import SessionEvent
     from drvocal.intent import parse
     from drvocal.journal import register_journal
 
@@ -165,6 +165,8 @@ async def amain(settings: Settings, screen) -> None:
     try:
         await assistant.run()
     finally:
+        if voice is not None:
+            await voice.close()
         for task in background:
             task.cancel()
 
@@ -173,8 +175,8 @@ def _make_claude_voice(settings: Settings, player, push):
     """Controleur Claude Code, ou None (Claude Code absent ou aucun projet valide)."""
     from drvocal.claude_cli import ClaudeCli, find_claude
     from drvocal.claude_registry import Registry
-    from drvocal.claude_session import SessionEvent
     from drvocal.claude_voice import ClaudeVoice
+    from drvocal.events import SessionEvent
     from drvocal.projects import validate_project_root
 
     exe = find_claude(settings.claude_command)
@@ -245,7 +247,7 @@ def _register_optional(catalogue, settings: Settings, ears, speaker, background:
     return library
 
 
-SECRET_NAMES = ("spotify_client_id", "spotify_token", "discord_bot_token", "claude_api_key")
+SECRET_NAMES = ("spotify_client_id", "spotify_token", "discord_bot_token")
 
 
 def check(store: SecretStore | None = None) -> int:
