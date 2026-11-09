@@ -175,3 +175,74 @@ def test_my_playlist_is_marked_mine_but_the_playlist_is_not(settings):
 ])
 def test_remember_phrasings(text, name, settings):
     assert parse(text, settings) == Intent("spotify.remember", {"name": name})
+
+
+@pytest.mark.parametrize("text", [
+    "Like ce titre.", "like ce morceau", "Ajoute ce titre à mes titres likés.", "Ajoute, ce morceau, à mes titres likés !",
+    "ajoute aux titres likés", "Ajoute cette chanson à mes titres likés", "Mets ce titre en favori.",
+    "mets ce titre en favoris", "J'aime ce titre.", "j'aime ce morceau",
+])
+def test_like_phrasings(text, settings):
+    assert parse(text, settings) == Intent("spotify.like", {})
+
+
+@pytest.mark.parametrize("text,playlist", [
+    ("Ajoute ce titre à ma playlist Rital List.", "Rital List"),
+    ("ajoute ce morceau à ma playlist sport", "sport"),
+    ("Ajoute, cette chanson, à ma playlist На повторе !", "На повторе"),
+    ("Mets ce titre dans ma playlist chill", "chill"),
+    ("Ajoute à ma playlist Road Trip.", "Road Trip"),
+    ("ajoute ça dans ma playlist soirée", "soirée"),
+])
+def test_add_to_playlist_phrasings(text, playlist, settings):
+    assert parse(text, settings) == Intent("spotify.add_to_playlist", {"playlist": playlist})
+
+
+@pytest.mark.parametrize("text", ["Annule.", "annule ça", "Annule le dernier ajout.", "annule le dernier", "Retire-le.", "retire le"])
+def test_undo_phrasings(text, settings):
+    assert parse(text, settings) == Intent("spotify.undo", {})
+
+
+def test_cancel_claude_stays_claude_stop_and_playlist_add_is_not_a_play(settings):
+    assert parse("annule Claude", settings) == Intent("claude.stop", {})
+    assert parse("Ajoute ce titre à ma playlist Rital List", settings).action != "spotify.play"
+
+
+@pytest.mark.parametrize("text,args", [
+    ("Monte le volume", {"step": "up"}),
+    ("Montre le volume sur Spotify", {"step": "up"}),
+    ("Augmente un peu le son.", {"step": "up"}),
+    ("Plus fort", {"step": "up"}),
+    ("Baisse le volume", {"step": "down"}),
+    ("Moins fort", {"step": "down"}),
+    ("Mets le volume à 30", {"level": "30"}),
+    ("Volume 80 %", {"level": "80"}),
+])
+def test_volume_commands(text, args, settings):
+    assert parse(text, settings) == Intent("spotify.volume", args)
+
+
+# Phrases reelles du journal du 2026-11-06 : "la playlist" et "ce son" lancaient la playlist au lieu d'ajouter.
+@pytest.mark.parametrize("text,playlist", [
+    ("Ajoute ce son à la playlist, la big list", "la big list"),
+    ("Ajoute ce titre à la playlist Cloud List.", "Cloud List"),
+    ("Ajoute ça dans la playlist Metal", "Metal"),
+    ("Rajoute ce truc à une playlist Rock Blues", "Rock Blues"),
+])
+def test_add_to_playlist_accepts_la_playlist_and_ce_son(text, playlist, settings):
+    assert parse(text, settings) == Intent("spotify.add_to_playlist", {"playlist": playlist})
+
+
+@pytest.mark.parametrize("text", ["Ajoute moi un truc bizarre", "Ajouter", "Rajoute la playlist"])
+def test_misunderstood_add_never_plays_music(text, settings):
+    assert parse(text, settings) is None
+
+
+def test_remember_the_playlist_playing_now_without_quotes(settings):
+    text = "Enregistre la playlist qui est jouée en ce moment sur Spotify sous le nom de «Ruskaya Sumyarka»."
+    assert parse(text, settings) == Intent("spotify.remember", {"name": "Ruskaya Sumyarka"})
+
+
+@pytest.mark.parametrize("text,step", [("Mets le son plus fort", "up"), ("Mets la musique moins fort", "down")])
+def test_mets_le_son_plus_fort_is_volume(text, step, settings):
+    assert parse(text, settings) == Intent("spotify.volume", {"step": step})

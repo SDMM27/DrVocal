@@ -10,6 +10,15 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 BEAM_SIZE = 5
+TOKENS_PER_S = 8  # le francais parle donne ~4 a 5 jetons par seconde : marge x2
+MIN_TOKENS = 24
+MAX_TOKENS = 224  # plafond de Whisper par fenetre de 30 s : 448 jetons, la moitie est le prompt
+
+
+def max_new_tokens(samples: int, sample_rate: int = 16000) -> int:
+    """Jetons a generer au plus par fenetre de 30 s : une transcription qui deraille s'arrete vite."""
+    seconds = min(samples / sample_rate, 30.0)
+    return min(MAX_TOKENS, MIN_TOKENS + round(TOKENS_PER_S * seconds))
 
 
 class Transcriber:
@@ -52,7 +61,10 @@ class Transcriber:
         segments, _info = model.transcribe(
             # beam 5 : meme duree mesuree sur un ordre reel (1,7 s), noms mieux transcrits
             # ("MCPOW FOSS RICESSE" -> "MCPOW, fausse richesse"), voir docs/mesures.md.
-            samples, language="fr", beam_size=BEAM_SIZE, vad_filter=False, **options
+            # Une seule passe, bornee : quand Whisper deraille (repetitions, emojis), le repli en
+            # temperature relancait jusqu'a 6 decodages complets, 45 a 68 s pour 5 s d'audio.
+            samples, language="fr", beam_size=BEAM_SIZE, vad_filter=False, temperature=0.0,
+            condition_on_previous_text=False, max_new_tokens=max_new_tokens(len(samples)), **options
         )
         return " ".join(s.text.strip() for s in segments).strip()
 

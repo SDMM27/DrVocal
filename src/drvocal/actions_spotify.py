@@ -1,4 +1,4 @@
-"""Actions Spotify (Web API, Premium) : lecture, pause, suivant, precedent, volume."""
+"""Actions Spotify (Web API, Premium) : lecture, pause, suivant, precedent, volume, likes et playlists."""
 # spotipy annote ses reponses JSON comme optionnelles alors qu'un echec leve SpotifyException.
 # pyright: reportOptionalSubscript=false, reportOptionalMemberAccess=false
 import asyncio
@@ -11,6 +11,7 @@ import threading
 import time
 import unicodedata
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import lru_cache
 
 import spotipy
@@ -27,7 +28,8 @@ log = logging.getLogger(__name__)
 REDIRECT_URI = "http://127.0.0.1:8888/callback"
 SCOPES = ("user-read-playback-state user-modify-playback-state "
           "user-follow-read user-top-read playlist-read-private "
-          "user-library-read user-read-recently-played")
+          "user-library-read user-read-recently-played "
+          "user-library-modify playlist-modify-private playlist-modify-public")
 SEARCH_LIMIT = 10  # maximum autorise par l'API depuis fevrier 2026
 LAUNCH_TIMEOUT = 20.0  # s : le temps que l'application ouverte apparaisse dans les appareils
 LAUNCH_POLL = 1.0
@@ -35,10 +37,16 @@ ARTIST_SIMILARITY = 0.75  # "stromer" -> Stromae, "Daft Pog" -> Daft Punk (trans
 CONFIRM_TIMEOUT = 3.0  # s : le temps que Spotify passe reellement en lecture apres un 204
 CONFIRM_POLL = 0.5
 LIBRARY_TTL = 3600.0  # s : duree avant de recharger la bibliotheque
+LIBRARY_RETRY = 30.0  # s : rechargement anticipe si une source a echoue (delai depasse, 429...),
+# double a chaque echec consecutif (jusqu'a LIBRARY_TTL) pour ne pas aggraver une limitation de debit.
 NOT_STARTED = "Spotify n'a pas lancé la lecture, je remets ta musique."
 DJ_URI = "spotify:playlist:37i9dQZF1EYkqdzj48dyYq"  # le DJ de Spotify, lance comme une playlist
+UNDO_WINDOW = 120.0  # s : delai pendant lequel la derniere ecriture (like, ajout) peut etre annulee
+NO_TRACK = "Aucun titre en cours."
+REAUTH = "Spotify refuse : réautorise Dr Vocal avec tools/spotify_login.py."
 MAX_PLAYLISTS = 1000
 MAX_SAVED_TRACKS = 1000
+MAX_PAGES = 40  # garde-fou de pagination : 40 pages de 50 couvrent largement les maximums ci-dessus
 # Entrees "faibles" (likes, ecoutes recentes) : avec ~3000 noms, 0.6 trouve de faux voisins
 # ("d'Ariano" -> Aria au lieu de daryana). Les "fortes" (suivis, top, playlists) gardent 0.6
 # et un bonus de classement.
@@ -47,6 +55,7 @@ STRONG_BONUS = 0.05
 VARIANT_PENALTY = 0.05  # "d'ariano" -> "ariano" est une supposition : moins sure que la requete telle quelle
 TRACK_SIMILARITY = 0.75  # titres : bien plus nombreux, un titre court ("Pink") ne doit pas capter "deft pink"
 LIBRARY_SIMILARITY = 0.6  # "d'Ariano" -> daryana : seuil bas, la bibliotheque est un petit ensemble connu
+VOLUME_STEP = 15  # "monte le volume" / "baisse le volume", en points de pourcentage
 LIBRARY_EXACT = 0.9  # au-dessus, la bibliotheque passe avant la recherche
 
 
@@ -252,20 +261,42 @@ class Library:
         self._entries: list[tuple[str, str]] = []
         self._loaded_strong: frozenset[str] = frozenset()
         self._loaded_at: float | None = None
+        self._ttl = LIBRARY_TTL
+        self._load_failed = False
+        self._failures = 0
+        self._editable: frozenset[str] = frozenset()
+        self._me_id: str | None = None
         self._lock = threading.Lock()
 
     def entries(self) -> list[tuple[str, str]]:
         with self._lock:  # prechargement et premiere commande peuvent se croiser : un seul chargement
             now = time.monotonic()
-            if self._loaded_at is None or now - self._loaded_at > LIBRARY_TTL:
+            if self._loaded_at is None or now - self._loaded_at > self._ttl:
+                self._load_failed = False
                 self._entries = self._load()
                 self._loaded_at = now
+                # Un echec partiel (ex. playlists en delai depasse) ne doit pas durer une heure.
+                self._failures = self._failures + 1 if self._load_failed else 0
+                self._ttl = min(LIBRARY_RETRY * 2 ** (self._failures - 1), LIBRARY_TTL) if self._failures else LIBRARY_TTL
             return self._with_aliases(self._entries)
 
     @property
     def strong(self) -> frozenset[str]:
         """Uri des sources fortes (suivis, top, playlists) et des alias appris a la voix."""
         return self._loaded_strong | {uri for _, uri in self._alias_items()}
+
+    def editable_playlists(self) -> list[tuple[str, str]]:
+        """(nom, uri) des playlists ou l'on peut ajouter : les siennes et les collaboratives. Sans alias."""
+        self.entries()
+        return [(n, u) for n, u in self._entries if u in self._editable]
+
+    def _current_user_id(self) -> str | None:
+        if self._me_id is None:
+            try:
+                self._me_id = self._client.me()["id"]
+            except Exception as e:  # sans identifiant, aucune playlist n'est modifiable
+                log.warning("Bibliotheque Spotify : profil indisponible (%s)", type(e).__name__)
+        return self._me_id
 
     def _alias_items(self) -> list[tuple[str, str]]:
         return self._aliases.items() if self._aliases else []
@@ -299,6 +330,10 @@ class Library:
         ]
         found: dict[tuple[str, str], str] = {}  # (nom normalise, uri) -> nom
         strong: set[str] = set()
+        editable: set[str] = set()
+        me_id = self._current_user_id()
+        if me_id is None:
+            self._load_failed = True
 
         def add(name: str, uri: str, is_strong: bool) -> None:
             found.setdefault((_letters(name), uri), name)
@@ -310,6 +345,7 @@ class Library:
                 items = fetch()
             except Exception as e:  # scope manquant (403), reseau... la lecture ne doit pas en pâtir
                 log.warning("Bibliotheque Spotify : %s indisponibles (%s)", label, e)
+                self._load_failed = True
                 continue
             for item in items or []:
                 if tracks:  # les likes et ecoutes recentes enveloppent le titre dans "track"
@@ -317,6 +353,9 @@ class Library:
                 if not item or item.get("is_local") or not item.get("uri") or not item.get("name"):
                     continue
                 add(item["name"], item["uri"], is_strong)
+                if label == "playlists" and (
+                        item.get("collaborative") or (me_id and (item.get("owner") or {}).get("id") == me_id)):
+                    editable.add(item["uri"])
                 if tracks:
                     artists = [a for a in item.get("artists") or [] if a and a.get("uri") and a.get("name")]
                     if artists:  # l'utilisateur dit souvent "artiste titre"
@@ -324,15 +363,23 @@ class Library:
                     for a in artists:  # artistes ecoutes sans etre suivis
                         add(a["name"], a["uri"], is_strong)
         self._loaded_strong = frozenset(strong)
+        self._editable = frozenset(editable)
         return [(name, uri) for (_, uri), name in found.items()]
 
 
 def _all_items(client: spotipy.Spotify, page: dict | None, limit: int) -> list:
-    """Items de toutes les pages d'un resultat pagine (champ `next`), au plus `limit`."""
+    """Items de toutes les pages d'un resultat pagine (champ `next`), au plus `limit`.
+
+    S'arrete aussi sur une page qui n'apporte rien et apres MAX_PAGES pages : une reponse
+    anormale (page vide qui annonce une suite) ne doit jamais faire tourner la boucle sans fin.
+    """
     items: list = []
-    while page:
+    pages = 0
+    while page and pages < MAX_PAGES:
+        pages += 1
+        before = len(items)
         items += page.get("items") or []
-        if len(items) >= limit or not page.get("next"):
+        if len(items) == before or len(items) >= limit or not page.get("next"):
             break
         page = client.next(page)
     return items[:limit]
@@ -451,6 +498,27 @@ def _play_query(client: spotipy.Spotify, query: str, launch: Callable[[], None] 
     return start(uris=[track["uri"]])
 
 
+@dataclass(frozen=True)
+class _Write:
+    """Derniere ecriture dans la bibliotheque, de quoi l'annuler."""
+    kind: str  # "like" ou "playlist"
+    uri: str
+    at: float
+    playlist_id: str = ""
+    snapshot_id: str | None = None
+
+
+def _refusal(e: SpotifyException, endpoint: str, what: str) -> Outcome | None:
+    """403 -> message dit (journal : endpoint et statut, jamais le jeton) ; autre erreur : None."""
+    if e.http_status != 403:
+        return None
+    log.warning("Spotify refuse l'ecriture : %s (statut %s)", endpoint, e.http_status)
+    text = str(e).casefold()
+    if "scope" in text or "insufficient" in text:
+        return Outcome(False, REAUTH)
+    return Outcome(False, what)
+
+
 def register_spotify(catalogue: Catalogue, client: spotipy.Spotify,
                      launch: Callable[[], None] | None = launch_spotify_app, preload: bool = True,
                      aliases: Aliases | None = None) -> Library:
@@ -493,7 +561,83 @@ def register_spotify(catalogue: Catalogue, client: spotipy.Spotify,
         aliases.add(name, uri)
         return Outcome(True, f"C'est noté : {name}.")
 
+    last_write: list[_Write] = []  # zero ou une ecriture annulable
+    write_lock = threading.Lock()
+
+    def current_track() -> tuple[str, str] | None:
+        item = _playback(client).get("item") or {}
+        uri = item.get("uri") or ""
+        return (uri, item.get("name") or "ce titre") if uri.startswith("spotify:track:") else None
+
+    def like(_: Intent) -> Outcome:
+        if (track := current_track()) is None:
+            return Outcome(False, NO_TRACK)
+        uri, name = track
+        try:
+            client._put("me/library", uris=uri)  # fevrier 2026 : /me/tracks est remplace par /me/library
+        except SpotifyException as e:
+            if out := _refusal(e, "PUT me/library", "Spotify refuse de modifier tes titres likés."):
+                return out
+            raise
+        with write_lock:
+            last_write[:] = [_Write("like", uri, time.monotonic())]
+        return Outcome(True, f"Ajouté à tes titres likés : {name}.")
+
+    def add_to_playlist(intent: Intent) -> Outcome:
+        if (track := current_track()) is None:
+            return Outcome(False, NO_TRACK)
+        uri = track[0]
+        names = {u: n for n, u in library.editable_playlists()}
+        playlist = _library_match([(n, u) for u, n in names.items()], intent.args.get("playlist", ""))
+        if playlist is None:
+            return Outcome(False, "Je ne trouve pas cette playlist parmi les tiennes.")
+        playlist_id = playlist.rsplit(":", 1)[-1]
+        try:
+            # fevrier 2026 : /playlists/{id}/tracks est remplace par /playlists/{id}/items
+            res = client._post(f"playlists/{playlist_id}/items", payload={"uris": [uri]})
+        except SpotifyException as e:
+            if out := _refusal(e, "POST playlists/items", "Spotify refuse de modifier cette playlist."):
+                return out
+            raise
+        snapshot = res.get("snapshot_id") if isinstance(res, dict) else None
+        with write_lock:
+            last_write[:] = [_Write("playlist", uri, time.monotonic(), playlist_id, snapshot)]
+        return Outcome(True, f"Ajouté à {names[playlist]}.")
+
+    def undo(_: Intent) -> Outcome:
+        with write_lock:
+            write = last_write[0] if last_write else None
+            if write is None or time.monotonic() - write.at > UNDO_WINDOW:
+                last_write.clear()
+                return Outcome(False, "Rien à annuler.")
+        endpoint = "me/library" if write.kind == "like" else "playlists/items"
+        try:
+            if write.kind == "like":
+                client._delete("me/library", uris=write.uri)
+            else:
+                body: dict = {"items": [{"uri": write.uri}]}
+                if write.snapshot_id:
+                    body["snapshot_id"] = write.snapshot_id
+                client._delete(f"playlists/{write.playlist_id}/items", payload=body)
+        except SpotifyException as e:
+            if out := _refusal(e, f"DELETE {endpoint}", "Spotify refuse d'annuler cet ajout."):
+                return out
+            raise
+        with write_lock:
+            if last_write and last_write[0] is write:
+                last_write.clear()
+        return Outcome(True, "Annulé.")
+
     def volume(intent: Intent) -> Outcome:
+        step = intent.args.get("step")
+        if step in ("up", "down"):  # relatif : depuis le volume actuel de l'appareil
+            device = (client.current_playback() or {}).get("device") or {}
+            current = device.get("volume_percent")
+            if not isinstance(current, int):
+                return Outcome(False, "Je ne connais pas le volume actuel.")
+            target = current + VOLUME_STEP if step == "up" else current - VOLUME_STEP
+            _with_device_fallback(client, client.volume, max(0, min(target, 100)))
+            return Outcome(True)
         level = intent.args.get("level", "")
         if not level.isdecimal():
             return Outcome(False, "Je n'ai pas compris le volume.")
@@ -515,6 +659,9 @@ def register_spotify(catalogue: Catalogue, client: spotipy.Spotify,
     action("spotify.dj", dj)
     if aliases is not None:
         action("spotify.remember", remember)
+    action("spotify.like", like)
+    action("spotify.add_to_playlist", add_to_playlist)
+    action("spotify.undo", undo)
     action("spotify.next", simple(client.next_track))
     action("spotify.previous", simple(client.previous_track))
     action("spotify.volume", volume)

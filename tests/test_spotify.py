@@ -219,7 +219,8 @@ def test_build_client_uses_pkce_with_library_scopes(tmp_path, monkeypatch):
     assert set(am.scope.split()) == {
         "user-read-playback-state", "user-modify-playback-state",
         "user-follow-read", "user-top-read", "playlist-read-private",
-        "user-library-read", "user-read-recently-played"}
+        "user-library-read", "user-read-recently-played",
+        "user-library-modify", "playlist-modify-private", "playlist-modify-public"}
     assert am.redirect_uri == mod.REDIRECT_URI
 
 
@@ -649,3 +650,195 @@ async def test_the_playlist_without_close_name_starts_nothing(client):
     out = await run(client, "spotify.play", query="sport", kind="playlist")
     assert not out.ok
     client.start_playback.assert_not_called()
+
+
+# --- ecritures dans la bibliotheque : like, ajout a une playlist, annulation ---
+
+TRACK = "spotify:track:42"
+
+
+def _writable(client, playlists, me="moi"):
+    client.me.return_value = {"id": me}
+    client.current_user_playlists.return_value = {"items": list(playlists)}
+    client.current_playback.side_effect = None
+    client.current_playback.return_value = {"is_playing": True, "item": {"uri": TRACK, "name": "Alors on danse"}}
+    client._post.return_value = {"snapshot_id": "snap1"}
+
+
+def _pl(name, pid, owner="moi", collaborative=False):
+    return {"name": name, "uri": f"spotify:playlist:{pid}", "owner": {"id": owner}, "collaborative": collaborative}
+
+
+async def test_like_uses_library_endpoint_and_plays_nothing(client):
+    _writable(client, [])
+    out = await run(client, "spotify.like")
+    assert out == Outcome(True, "Ajouté à tes titres likés : Alors on danse.")
+    client._put.assert_called_once_with("me/library", uris=TRACK)
+    client.current_user_saved_tracks_add.assert_not_called()
+    client.start_playback.assert_not_called()
+
+
+@pytest.mark.parametrize("state", [None, {"is_playing": True, "item": {"uri": "spotify:episode:1"}}])
+async def test_like_without_track(client, state):
+    client.current_playback.side_effect = None
+    client.current_playback.return_value = state
+    assert await run(client, "spotify.like") == Outcome(False, "Aucun titre en cours.")
+    client._put.assert_not_called()
+
+
+@pytest.mark.parametrize("query,name,pid", [
+    ("Rital Liste", "Rital List", "rl"),
+    ("na povtore", "На повторе", "np"),
+])
+async def test_add_to_owned_playlist_fuzzy(client, query, name, pid):
+    _writable(client, [_pl("Rital List", "rl"), _pl("На повторе", "np"), _pl("Autre", "zz")])
+    out = await run(client, "spotify.add_to_playlist", playlist=query)
+    assert out == Outcome(True, f"Ajouté à {name}.")
+    client._post.assert_called_once_with(f"playlists/{pid}/items", payload={"uris": [TRACK]})
+    client.start_playback.assert_not_called()
+
+
+async def test_add_to_collaborative_playlist(client):
+    _writable(client, [_pl("Soirée", "so", owner="autre", collaborative=True)])
+    assert (await run(client, "spotify.add_to_playlist", playlist="soirée")).ok
+
+
+async def test_add_refused_for_foreign_playlist_and_for_alias(client, tmp_path):
+    _writable(client, [_pl("Chill", "ch", owner="autre")])
+    cat, aliases = _aliased(client, tmp_path)
+    aliases.add("En boucle", "spotify:playlist:alias")
+    for query in ("chill", "en boucle"):
+        out = await cat.run(Intent("spotify.add_to_playlist", {"playlist": query}))
+        assert out == Outcome(False, "Je ne trouve pas cette playlist parmi les tiennes.")
+    client._post.assert_not_called()
+
+
+async def test_add_without_profile_means_nothing_editable(client):
+    _writable(client, [_pl("Rital List", "rl")])
+    client.me.side_effect = SpotifyException(401, -1, "nope")
+    out = await run(client, "spotify.add_to_playlist", playlist="Rital List")
+    assert out.speak == "Je ne trouve pas cette playlist parmi les tiennes."
+
+
+async def test_undo_like(client):
+    _writable(client, [])
+    cat = Catalogue()
+    register_spotify(cat, client, preload=False)
+    await cat.run(Intent("spotify.like", {}))
+    assert await cat.run(Intent("spotify.undo", {})) == Outcome(True, "Annulé.")
+    client._delete.assert_called_once_with("me/library", uris=TRACK)
+    assert await cat.run(Intent("spotify.undo", {})) == Outcome(False, "Rien à annuler.")
+    client._delete.assert_called_once()
+
+
+async def test_undo_playlist_add_sends_snapshot(client):
+    _writable(client, [_pl("Rital List", "rl")])
+    cat = Catalogue()
+    register_spotify(cat, client, preload=False)
+    await cat.run(Intent("spotify.add_to_playlist", {"playlist": "rital list"}))
+    assert await cat.run(Intent("spotify.undo", {})) == Outcome(True, "Annulé.")
+    client._delete.assert_called_once_with(
+        "playlists/rl/items", payload={"items": [{"uri": TRACK}], "snapshot_id": "snap1"})
+    assert (await cat.run(Intent("spotify.undo", {}))).speak == "Rien à annuler."
+
+
+async def test_undo_nothing_and_too_late(client, monkeypatch):
+    _writable(client, [])
+    cat = Catalogue()
+    register_spotify(cat, client, preload=False)
+    assert await cat.run(Intent("spotify.undo", {})) == Outcome(False, "Rien à annuler.")
+    await cat.run(Intent("spotify.like", {}))
+    monkeypatch.setattr("drvocal.actions_spotify.UNDO_WINDOW", -1.0)
+    assert await cat.run(Intent("spotify.undo", {})) == Outcome(False, "Rien à annuler.")
+    client._delete.assert_not_called()
+
+
+@pytest.mark.parametrize("message,speak", [
+    ("Insufficient client scope", "Spotify refuse : réautorise Dr Vocal avec tools/spotify_login.py."),
+    ("Forbidden", "Spotify refuse de modifier cette playlist."),
+])
+async def test_forbidden_add_message(client, caplog, message, speak):
+    _writable(client, [_pl("Rital List", "rl")])
+    client._post.side_effect = SpotifyException(403, -1, message)
+    out = await run(client, "spotify.add_to_playlist", playlist="rital list")
+    assert out == Outcome(False, speak)
+    assert "playlists/items" in caplog.text and "403" in caplog.text
+
+
+async def test_forbidden_like_scope(client):
+    _writable(client, [])
+    client._put.side_effect = SpotifyException(403, -1, "Insufficient client scope")
+    out = await run(client, "spotify.like")
+    assert out.speak == "Spotify refuse : réautorise Dr Vocal avec tools/spotify_login.py."
+
+
+@pytest.mark.parametrize("step,current,expected", [("up", 40, 55), ("down", 40, 25), ("up", 95, 100), ("down", 5, 0)])
+async def test_relative_volume_moves_from_current_level(client, step, current, expected):
+    client.current_playback.side_effect = None
+    client.current_playback.return_value = {"device": {"volume_percent": current}}
+    assert (await run(client, "spotify.volume", step=step)).ok
+    client.volume.assert_called_once_with(expected)
+
+
+async def test_relative_volume_without_known_level_is_not_ok(client):
+    client.current_playback.side_effect = None
+    client.current_playback.return_value = None
+    assert not (await run(client, "spotify.volume", step="up")).ok
+    client.volume.assert_not_called()
+
+
+async def test_library_retries_soon_after_a_failed_source(client, monkeypatch):
+    # 2026-11-06 : playlists en delai depasse au demarrage -> aucune playlist pendant une heure.
+    monkeypatch.setattr("drvocal.actions_spotify.LIBRARY_RETRY", -1)
+    client.current_user_playlists.side_effect = [TimeoutError("read timed out"), {"items": []}]
+    cat = Catalogue()
+    register_spotify(cat, client, launch=None, preload=False)
+    await cat.run(Intent("spotify.play", {"query": "a"}))
+    await cat.run(Intent("spotify.play", {"query": "b"}))
+    assert client.current_user_playlists.call_count == 2
+
+
+async def test_library_keeps_the_hourly_reload_when_everything_loaded(client, monkeypatch):
+    monkeypatch.setattr("drvocal.actions_spotify.LIBRARY_RETRY", -1)
+    cat = Catalogue()
+    register_spotify(cat, client, launch=None, preload=False)
+    await cat.run(Intent("spotify.play", {"query": "a"}))
+    await cat.run(Intent("spotify.play", {"query": "b"}))
+    client.current_user_playlists.assert_called_once()
+
+
+def test_library_retry_delay_doubles_while_spotify_keeps_failing(monkeypatch):
+    from drvocal.actions_spotify import LIBRARY_RETRY, LIBRARY_TTL, Library
+    c = MagicMock()
+    c.me.return_value = {"id": "me"}
+    c.current_user_playlists.side_effect = TimeoutError("read timed out")
+    lib = Library(c)
+    delays = []
+    for _ in range(4):
+        lib._loaded_at = None  # force le rechargement suivant
+        lib.entries()
+        delays.append(lib._ttl)
+    assert delays == [LIBRARY_RETRY, LIBRARY_RETRY * 2, LIBRARY_RETRY * 4, LIBRARY_RETRY * 8]
+    c.current_user_playlists.side_effect = None
+    c.current_user_playlists.return_value = {"items": []}
+    lib._loaded_at = None
+    lib.entries()
+    assert lib._ttl == LIBRARY_TTL  # retour a la normale apres un chargement complet
+
+
+def test_all_items_stops_on_a_page_that_brings_nothing():
+    # Une page vide qui annonce une suite faisait boucler sans fin (et saturer la memoire).
+    from drvocal.actions_spotify import _all_items
+    c = MagicMock()
+    empty = {"items": [], "next": "https://api.spotify.com/next"}
+    c.next.return_value = empty
+    assert _all_items(c, empty, 1000) == []
+    assert c.next.call_count == 0
+
+
+def test_all_items_caps_the_number_of_pages():
+    from drvocal.actions_spotify import MAX_PAGES, _all_items
+    c = MagicMock()
+    page = {"items": [{"id": 1}], "next": "https://api.spotify.com/next"}
+    c.next.return_value = page
+    assert len(_all_items(c, page, 10_000)) == MAX_PAGES

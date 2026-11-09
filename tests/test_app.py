@@ -198,19 +198,63 @@ async def test_success_is_silent_except_sound():
     assert player.played == ["wake", "success"]
 
 
-async def test_wake_ignored_while_handling():
+async def test_wake_word_during_capture_restarts_the_command():
+    # "Docteur, mets... Docteur" : la premiere phrase est jetee, seule la seconde est transcrite
+    script = [WAKE, SPEECH, SPEECH, SPEECH, WAKE, *[SILENT] * 4, SPEECH, SPEECH, *SILENCE_END, *GAP]
+    heard: list[int] = []
+
+    def transcribe(audio: np.ndarray) -> str:
+        heard.append(int((audio[::FRAME_SAMPLES] == SPEECH).sum()))
+        return "pause"
+
+    ears = Ears(feed(script), transcribe, lambda: is_speech)
+    player, catalogue = Player(), FakeCatalogue()
+    assistant = Assistant(ears, Detector(), lambda: ears.listen(700, 2000, 15000), parse, catalogue,
+                          player, Speaker())
+    await run_assistant(assistant)
+    assert heard == [2]  # une seule transcription, sans les 3 trames de la phrase abandonnee
+    assert catalogue.ran == [Intent("spotify.pause", {})]
+    assert player.played == ["wake", "wake", "success"]
+
+
+async def test_wake_word_during_transcription_discards_the_result():
+    started, release = asyncio.Event(), asyncio.Event()
     captures = []
 
     async def slow_capture():
         captures.append(1)
-        await asyncio.sleep(0.15)
-        return None
+        if len(captures) == 1:
+            started.set()
+            await release.wait()  # transcription qui s'eternise
+            return "pause"
+        return "pause"
 
-    script = [WAKE, SILENT, WAKE, SILENT, WAKE, SILENT, *[SILENT] * 60]
-    assistant, _, detector, player, *_ = build(script, capture=slow_capture)
+    script = [WAKE, *[SILENT] * 5, WAKE, *GAP]
+    assistant, _, _, player, _, catalogue, _ = build(script, capture=slow_capture)
     await run_assistant(assistant)
-    assert len(captures) == 1
-    assert player.played == ["wake"]
+    assert len(captures) == 2
+    assert catalogue.ran == [Intent("spotify.pause", {})]  # une seule commande
+    assert player.played == ["wake", "wake", "success"]
+
+
+async def test_wake_word_ignored_while_an_action_listens():
+    async def listening_action():
+        return await ears.listen(700, 240, 15000)
+
+    script = [WAKE, SPEECH, *SILENCE_END, WAKE, SPEECH, *SILENCE_END, *GAP]
+    ears, _ = make_ears(script, texts=["pause", "dictee"])
+    heard = []
+
+    class Listening(FakeCatalogue):
+        async def run(self, intent):
+            heard.append(await listening_action())
+            return Outcome(True)
+
+    detector, player = Detector(), Player()
+    assistant = Assistant(ears, detector, voice_capture(ears), parse, Listening(), player, Speaker())
+    await run_assistant(assistant)
+    assert heard == ["dictee"]  # le mot de reveil pendant une dictee ne relance rien
+    assert player.played == ["wake", "success"]
 
 
 async def test_long_action_does_not_block_next_wake():
@@ -234,14 +278,14 @@ async def test_pump_end_releases_listener():
     ears, _ = make_ears([SPEECH, SPEECH])
     listener = asyncio.create_task(ears.listen(700, 5000, 15000))
     await asyncio.sleep(0)
-    await asyncio.wait_for(ears.pump(lambda f: None), 5)
+    await asyncio.wait_for(ears.pump(lambda f, listening: None), 5)
     assert await asyncio.wait_for(listener, 5) == "pause"
 
 
 async def listen_during_pump(ears: Ears, coro):
     task = asyncio.create_task(coro)
     await asyncio.sleep(0)  # l'ecouteur est ouvert avant la premiere trame
-    await asyncio.wait_for(ears.pump(lambda f: None), 10)
+    await asyncio.wait_for(ears.pump(lambda f, listening: None), 10)
     return await asyncio.wait_for(task, 10)
 
 
@@ -251,7 +295,7 @@ async def test_key_mode_records_only_while_held():
     idle = []
     task = asyncio.create_task(ears.record_while(lambda: next(held, False), 15000))
     await asyncio.sleep(0)
-    await asyncio.wait_for(ears.pump(idle.append), 10)
+    await asyncio.wait_for(ears.pump(lambda f, listening: None if listening else idle.append(f)), 10)
     assert await task == "pause"
     assert transcribed == [8 * FRAME_SAMPLES]  # 6 trames tenues + 2 de traine
     assert len(idle) == 12  # le reste du flux retourne au detecteur
@@ -425,7 +469,7 @@ def test_event_handler_sounds_and_push():
 
 async def test_listen_keeps_debug_capture_including_silent_ones(tmp_path):
     ears = Ears(feed([SPEECH, SPEECH, *SILENCE_END, *[SILENT] * 8]), lambda a: "pause", lambda: is_speech, tmp_path)
-    pump = asyncio.create_task(ears.pump(lambda f: None))
+    pump = asyncio.create_task(ears.pump(lambda f, listening: None))
     assert await ears.listen(700, 240, 15000) == "pause"
     assert await ears.listen(700, 240, 15000) is None  # aucune parole : garde aussi
     pump.cancel()
@@ -438,7 +482,7 @@ async def test_listen_keeps_debug_capture_including_silent_ones(tmp_path):
 async def test_listen_without_captures_dir_writes_nothing(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     ears = Ears(feed([SPEECH, *SILENCE_END]), lambda a: "pause", lambda: is_speech)
-    pump = asyncio.create_task(ears.pump(lambda f: None))
+    pump = asyncio.create_task(ears.pump(lambda f, listening: None))
     await ears.listen(700, 240, 15000)
     pump.cancel()
     assert list(tmp_path.rglob("*.wav")) == []

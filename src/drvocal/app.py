@@ -73,14 +73,14 @@ class Ears:
         self.last_audio: np.ndarray | None = None  # audio de la derniere ecoute (journal des commandes)
         self.last_stt_ms: int | None = None
 
-    async def pump(self, on_idle_frame: Callable[[np.ndarray], None]) -> None:
+    async def pump(self, on_frame: Callable[[np.ndarray, bool], None]) -> None:
+        """`on_frame(trame, ecoute_en_cours)` voit chaque trame, meme celles qui vont a l'ecouteur."""
         try:
             async for frame in self._frames:
                 queue = self._queue
                 if queue is not None:
                     queue.put_nowait(frame)
-                else:
-                    on_idle_frame(frame)
+                on_frame(frame, queue is not None)
         finally:
             self._closed = True
             if self._queue is not None:
@@ -180,7 +180,11 @@ class Ears:
 
 
 class Assistant:
-    """Boucle principale : reveil, son, capture, parse, action en tache de fond, son de resultat."""
+    """Boucle principale : reveil, son, capture, parse, action en tache de fond, son de resultat.
+
+    Redire le mot de reveil (ou rappuyer sur la touche) pendant l'ecoute ou la transcription
+    d'une commande l'abandonne et en ecoute une nouvelle.
+    """
 
     def __init__(
         self,
@@ -204,6 +208,7 @@ class Assistant:
         self._notify = notify
         self._command_log = command_log
         self._waking = False
+        self._restart = asyncio.Event()
         self._tasks: set[asyncio.Task] = set()
 
     async def run(self) -> None:
@@ -214,22 +219,51 @@ class Assistant:
         self._tasks.add(task)  # reference forte jusqu'a la fin
         task.add_done_callback(self._tasks.discard)
 
-    def _on_frame(self, frame: np.ndarray) -> None:
-        if self._waking:
-            return
+    def _on_frame(self, frame: np.ndarray, listening: bool = False) -> None:
+        if listening and not self._waking:
+            return  # une action ecoute (note, question de Claude) : le mot de reveil n'y fait rien
         try:
             woke = self._detector.process(frame)
         except Exception:
             log.exception("detecteur de reveil en erreur")
             return
-        if woke:
+        if not woke:
+            return
+        if self._waking:
+            self._restart.set()
+        else:
             self._waking = True
             self._spawn(self._on_wake())
+
+    async def _capture_or_restart(self) -> tuple[str | None, bool]:
+        """(texte, False) ; ou (None, True) si le mot de reveil revient avant la fin."""
+        self._restart.clear()
+        capture = asyncio.ensure_future(self._capture())
+        restart = asyncio.ensure_future(self._restart.wait())
+        try:
+            done, _ = await asyncio.wait({capture, restart}, return_when=asyncio.FIRST_COMPLETED)
+        except BaseException:
+            capture.cancel()
+            raise
+        finally:
+            restart.cancel()
+        if capture in done:
+            return capture.result(), False
+        capture.cancel()  # une transcription deja lancee finit dans son thread, ignoree
+        await asyncio.wait({capture})  # libere l'ecoute avant d'en ouvrir une autre
+        if not capture.cancelled() and capture.exception() is not None:
+            log.debug("commande abandonnee en erreur : %r", capture.exception())
+        return None, True
 
     async def _on_wake(self) -> None:
         try:
             self._player.play("wake")
-            text = await self._capture()
+            while True:
+                text, restarted = await self._capture_or_restart()
+                if not restarted:
+                    break
+                log.info("commande recommencee")
+                self._player.play("wake")
             if text is None:
                 return  # faux reveil : retour en veille, sans son
             # copie tout de suite : une action Discord reecoute plus tard et ecraserait ces attributs

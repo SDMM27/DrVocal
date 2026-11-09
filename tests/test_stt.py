@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from drvocal.audio.stt import Transcriber
+from drvocal.audio.stt import MAX_TOKENS, Transcriber, max_new_tokens
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -41,6 +41,15 @@ def test_transcribes_french_with_beam_search_without_vad():
     t._model = Model()
     assert t.transcribe(np.zeros(1600, dtype=np.int16)) == "Lance MC Pao"
     assert seen["language"] == "fr" and seen["beam_size"] == 5 and seen["vad_filter"] is False
+    # une seule passe bornee : une transcription qui deraille ne tourne plus une minute
+    assert seen["temperature"] == 0.0 and seen["condition_on_previous_text"] is False
+    assert seen["max_new_tokens"] == max_new_tokens(1600)
+
+
+def test_token_budget_grows_with_audio_and_is_capped():
+    assert max_new_tokens(16000 * 5) == 24 + 40  # commande de 5 s
+    assert max_new_tokens(16000 * 2) < max_new_tokens(16000 * 10)
+    assert max_new_tokens(16000 * 120) == MAX_TOKENS  # dictee longue : plafond par fenetre de 30 s
 
 
 def test_unload_releases_model():

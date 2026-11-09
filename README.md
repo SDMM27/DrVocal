@@ -147,13 +147,13 @@ Spotify demande un compte **Premium** pour le contrôle de lecture.
 1. Sur le [tableau de bord développeur Spotify](https://developer.spotify.com/dashboard), créer une application.
 2. Ajouter exactement cette URI de redirection : `http://127.0.0.1:8888/callback`.
 3. Copier le Client ID dans `secrets.toml` (`spotify_client_id`). Aucun secret client n'est nécessaire (authentification PKCE).
-4. Autoriser l'application une fois, avant d'utiliser la voix : `uv run python tools/spotify_login.py`. Le navigateur s'ouvre (permissions `user-read-playback-state`, `user-modify-playback-state`, `user-follow-read`, `user-top-read`, `playlist-read-private`, `user-library-read` et `user-read-recently-played`) ; le script affiche ensuite le nombre d'artistes, de playlists et de titres de ta bibliothèque. Le jeton est gardé dans `.spotify-cache` à la racine, ignoré par git. Sans cette étape, le navigateur s'ouvre au premier ordre Spotify.
+4. Autoriser l'application une fois, avant d'utiliser la voix : `uv run python tools/spotify_login.py`. Le navigateur s'ouvre (permissions `user-read-playback-state`, `user-modify-playback-state`, `user-follow-read`, `user-top-read`, `playlist-read-private`, `user-library-read`, `user-read-recently-played`, `user-library-modify`, `playlist-modify-private` et `playlist-modify-public`) ; le script affiche ensuite le nombre d'artistes, de playlists et de titres de ta bibliothèque. Le jeton est gardé dans `.spotify-cache` à la racine, ignoré par git. Sans cette étape, le navigateur s'ouvre au premier ordre Spotify.
 
 **Bibliothèque prioritaire** : avant toute recherche, « mets… » compare ce que tu dis à tes artistes suivis, tes playlists, tes titres likés, tes écoutes récentes et tes plus écoutés (artistes et titres), jusqu'à 1000 titres likés. Un artiste écouté sans être suivi y entre aussi, et un titre se dit avec ou sans son artiste (« Mc Pao fausse richesse »). Elle se charge en arrière-plan au démarrage et se recharge toutes les heures ; les titres exigent une correspondance plus proche que les artistes. Un nom approximatif suffit (la transcription déforme souvent les noms : « d'Ariano » joue Daryana). Sans correspondance, la recherche Spotify classique prend le relais.
 
 **Playlists générées par Spotify** (« En boucle », Daily Mix, Découvertes de la semaine…) : l'API ne les voit pas en mode développement (absentes de ta bibliothèque et de la recherche), mais Spotify sait les lire par leur adresse. Lance-en une dans Spotify, puis dis « retiens cette playlist sous le nom En boucle » (ou « enregistre cette playlist comme… », « appelle cette playlist… ») : Dr Vocal garde l'adresse de ce qui joue dans `spotify_aliases.json` (dossier de données) et « lance ma playlist en boucle » fonctionne aussitôt. Même chose avec « ce morceau », « cet album » ou « cet artiste ». « Ma playlist X » ne cherche jamais dans le catalogue public : sans correspondance dans ta bibliothèque et tes alias, Dr Vocal le dit au lieu de lancer la playlist d'un inconnu.
 
-**Après une mise à jour** qui ajoute des permissions, relancer `uv run python tools/spotify_login.py` pour réautoriser ; sinon, spotipy refuse l'ancien jeton et le navigateur s'ouvre au premier ordre Spotify.
+**Après une mise à jour** (en particulier celle qui ajoute les likes et l'ajout à une playlist : `user-library-modify`, `playlist-modify-private`, `playlist-modify-public`), relancer `uv run python tools/spotify_login.py` pour réautoriser ; sinon, spotipy refuse l'ancien jeton et le navigateur s'ouvre au premier ordre Spotify.
 
 Dr Vocal vérifie que la lecture démarre vraiment et retente une fois sur l'application du PC sinon.
 
@@ -198,6 +198,10 @@ Maintiens la touche ou le bouton (`push_to_talk_key`, `mouse5` par défaut), dis
 
 Avec `wake_mode = "voice"`, dis « salut doc vocal » (ou la phrase de `wake_phrases` pour laquelle tu as un modèle), attends le petit son, puis dis ta demande : la fin de phrase est détectée après 0,7 s de silence. Si aucune parole ne suit dans les 3 s, il retourne en veille sans son. Ce mode demande un modèle entraîné sur ta voix ; les mesures actuelles sont dans `docs/mesures.md`.
 
+### Recommencer une demande
+
+Si tu t'es trompé ou que la réponse tarde, redis le mot de réveil (en mode touche : relâche puis rappuie) pendant l'écoute ou la transcription. La demande en cours est abandonnée, le son de réveil rejoue et Dr Vocal écoute la nouvelle. Pendant une dictée de note ou une réponse à Claude, le mot de réveil ne fait rien.
+
 ### Sons de retour
 
 Réveil : double bip montant. Succès : bip aigu. Échec ou commande non comprise : bip descendant. Claude a fini : bip discret. Rien ne se dit à voix haute sauf pour un message Discord à relire et pour les questions de Claude.
@@ -213,6 +217,9 @@ Les commandes sont analysées par des règles (accents et majuscules ignorés), 
   - « musique suivante », « chanson suivante », « suivant », « passe la musique »
   - « musique précédente », « précédent »
   - « volume 40 » (ou « volume 40 pour cent »)
+  - « like ce titre », « ajoute ce titre à mes titres likés », « mets ce titre en favori », « j'aime ce titre » : ajoute le titre en cours à tes titres likés
+  - « ajoute ce titre à ma playlist Sport », « mets ce morceau dans ma playlist Sport » : ajoute le titre en cours à la playlist la plus proche ; seules tes propres playlists et les playlists collaboratives sont possibles (pas les alias ni celles des autres), et Dr Vocal dit le nom exact de la playlist choisie
+  - « annule », « annule le dernier ajout », « retire-le » : annule le dernier like ou ajout, dans les 2 minutes (une seule fois ; « annule Claude » arrête toujours la session Claude)
   - « retiens cette playlist sous le nom En boucle », « enregistre cette playlist comme Sport », « appelle cet artiste Mon groupe » : mémorise ce qui joue sous ce nom
 - **Discord**
   - « coupe mon micro », « mute-moi » ; « mets-moi en sourdine »

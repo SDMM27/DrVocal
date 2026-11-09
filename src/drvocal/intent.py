@@ -44,11 +44,31 @@ _SIMPLE_RULES = [
                            r"|(?:je )?(?:mets|lance|joue) (?:de la |la )?musique(?: sur spotify)?)$")),
     ("spotify.next", _rx(r"^(?:musique suivante|chanson suivante|morceau suivant|suivant|passe la (?:musique|chanson))$")),
     ("spotify.previous", _rx(r"^(?:musique precedente|chanson precedente|morceau precedent|precedent)$")),
+    ("spotify.undo", _rx(r"^(?:(?:annule|annuler)(?: ca| cela| le dernier(?: ajout| like)?)?|retire~(?:le|la|ca))$")),
     ("notes.start", _rx(r"^(?:prends|prend|fais|ecris) une note$")),
     ("claude.stop", _rx(r"^(?:arrete|arretes|stop|stoppe|annule|coupe|termine) (?:la |cette )?(?:session )?(?:de )?"
                         r"claude(?: agent)?$")),
 ]
-_VOLUME = _rx(r"^volume (\d{1,3})\s*(?:%|pour\s*cent)?$")
+# "ce titre" et ses variantes ; "ca" seul reste possible ("ajoute ca a ma playlist X").
+_THIS = r"(?:ce|le|cet) (?:titre|morceau|son|son-la|truc)|cette (?:chanson|musique|piste)|celui~ci|celle~ci|ca"
+_FAVORITES = r"(?:titres? likes?|likes?|favoris?|coups? de coeur)"
+_LIKE = _rx(rf"^(?:(?:like|liker)(?: (?:{_THIS}))?"
+            rf"|(?:ajoute|ajouter|rajoute|mets|met) (?:(?:{_THIS}) )?(?:(?:a|aux|dans) (?:mes |les |mon )?|en ){_FAVORITES}"
+            rf"|j'?aime (?:{_THIS}))$")
+_ADD_TO_PLAYLIST = _rx(rf"^(?:ajoute|ajouter|rajoute|mets|met) (?:(?:{_THIS}) )?(?:a|dans|sur) (?:ma|mes|la|une|ta) playlists? (.+)$")
+# Tout ordre "ajoute ..." qui n'est pas compris ne doit jamais lancer de musique.
+_ADD_VERB = _rx(r"^(?:ajoute|ajouter|rajoute|rajouter)(?:\s|$)")
+_VOLUME = _rx(r"^(?:(?:mets|regle|monte|baisse|descends) )?(?:le )?volume (?:a )?(\d{1,3})\s*(?:%|pour\s*cent)?"
+              r"(?: (?:sur|de|dans) spotify)?$")
+# Volume relatif. "montre le volume" : transcription frequente de "monte le volume".
+_VOLUME_UP = _rx(r"^(?:(?:monte|montre|augmente|remonte|hausse) (?:un peu |encore )?(?:le )?(?:son|volume)"
+                 r"(?: de la musique)?"
+                 r"|(?:mets )?(?:le son |la musique )?(?:un peu |encore )?plus fort(?: le son| la musique)?)"
+                 r"(?: (?:sur|de|dans) spotify)?$")
+_VOLUME_DOWN = _rx(r"^(?:(?:baisse|diminue|descends|redescends) (?:un peu |encore )?(?:le )?(?:son|volume)"
+                   r"(?: de la musique)?"
+                   r"|(?:mets )?(?:le son |la musique )?(?:un peu |encore )?moins fort(?: le son| la musique)?)"
+                   r"(?: (?:sur|de|dans) spotify)?$")
 _MESSAGE = _rx(r"^(?:ecris|envoie) dans (?:le salon )?(.+)$")
 _MOVE = _rx(r"^(?:va|vas|viens|mets~moi|deplace~moi) (?:dans|sur) (?:le )?(?:salon )?(.+)$")
 _MUTE_MEMBER = _rx(r"^(?:mute|coupe le micro de|rends muet) (.+)$")
@@ -59,7 +79,8 @@ _PLAY = _rx(r"^(?:je )?(?:mets|joue|lance|ouvre|j'ouvre) (.+)$")  # "Je joue..."
 _MY_PLAYLIST = _rx(r"(?:^|\s)(?P<det>ma|mes|la) playlists? (?P<q>.+)$")
 # "retiens cette playlist sous le nom X" : apprend l'uri de ce qui joue (playlists invisibles a l'API).
 _REMEMBER = _rx(r"^(?:retiens|retient|enregistre|memorise|appelle|nomme) "
-                r"(?:cette (?:playlist|chanson)|ce (?:morceau|titre)|cet (?:album|artiste))"
+                r"(?:(?:cette|la) (?:playlist|chanson)|ce (?:morceau|titre)|cet (?:album|artiste))"
+                r"(?: qui (?:est jouee|joue|passe|tourne)(?: en ce moment| maintenant)?(?: sur spotify)?)?"
                 r"(?: (?:sous le nom de|sous le nom|sous|en tant que|comme))? (.+)$")
 _MY_PLAYLIST_MAX_WORDS = 10
 _DJ_LAST = re.compile(r"(?:^|[\s'])dj$")
@@ -101,7 +122,8 @@ def _unrepeat(text: str) -> str:
     return text
 
 
-_INNER_PUNCT = re.compile(r"[,;:!?…]")
+_INNER_PUNCT = re.compile(r"[,;:!?…«»\"“”]")
+_STRIP = " ,;:!?….«»\"“”"
 
 
 def parse(text: str, settings: Settings) -> Intent | None:
@@ -123,6 +145,10 @@ def parse(text: str, settings: Settings) -> Intent | None:
 
     if m := _VOLUME.match(t):
         return Intent("spotify.volume", {"level": m.group(1)})
+    if _VOLUME_UP.match(t):
+        return Intent("spotify.volume", {"step": "up"})
+    if _VOLUME_DOWN.match(t):
+        return Intent("spotify.volume", {"step": "down"})
 
     for name in sorted(settings.projects, key=len, reverse=True):
         key = _words(name)
@@ -150,8 +176,16 @@ def parse(text: str, settings: Settings) -> Intent | None:
     if len(t.split()) <= _MISHEARD_MAX_WORDS and _DJ_LAST.search(t):
         return Intent("spotify.dj", {})
 
+    if _LIKE.match(t):
+        return Intent("spotify.like", {})
+
+    if m := _ADD_TO_PLAYLIST.match(t):
+        return Intent("spotify.add_to_playlist", {"playlist": orig[m.start(1):].strip(_STRIP)})
+    if _ADD_VERB.match(t):
+        return None
+
     if m := _REMEMBER.match(t):
-        return Intent("spotify.remember", {"name": orig[m.start(1):].strip(" ,;:!?…")})
+        return Intent("spotify.remember", {"name": orig[m.start(1):].strip(_STRIP)})
 
     if len(t.split()) <= _MY_PLAYLIST_MAX_WORDS and (m := _MY_PLAYLIST.search(t)):
         intent = _play(orig, t, m.start("q"))
@@ -177,4 +211,4 @@ def _play(orig: str, folded: str, start: int) -> Intent:
     end = len(folded)
     if (s := _ON_SPOTIFY.search(folded, start)) and s.start() > start:
         end = s.start()
-    return Intent("spotify.play", {"query": orig[start:end].strip(" ,;:!?…")})
+    return Intent("spotify.play", {"query": orig[start:end].strip(_STRIP)})
